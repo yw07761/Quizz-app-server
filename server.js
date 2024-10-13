@@ -52,30 +52,24 @@ app.use(
 
 // Registration
 app.post("/sign-up", async (req, res) => {
-    try {
-      const { userID, username, password, email } = req.body;
-  
-      // Check if the username is already taken
-      const existingUsername = await User.findOne({ username });
-      if (existingUsername) {
-        return res.status(400).send({ message: "Username already taken." });
-      }
-  
-      // Check if the email is already taken
-      const existingEmail = await User.findOne({ email });
-      if (existingEmail) {
-        return res.status(400).send({ message: "Email already in use." });
-      }
-  
-      // Create a new user
-      const user = new User({ userID, username, password, email });
-      await user.save();
-  
-      res.status(201).send({ message: "User registered successfully." });
-    } catch (error) {
-      res.status(400).send(error);
+  try {
+    const { username, password } = req.body;
+
+    // Check if the username is already taken
+    const existing = await User.findOne({ username });
+
+    if (existing) {
+      return res.status(400).send({ message: "Username already taken." });
     }
-  });
+    // Create a new user
+    const user = new User({ username, password });
+    await user.save();
+
+    res.status(201).send({ message: "User registered successfully." });
+  } catch (error) {
+    res.status(400).send(error);
+  }
+});
 
 // Login
 app.post("/sign-in", async (req, res) => {
