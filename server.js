@@ -3,81 +3,113 @@ require("dotenv").config();
 const express = require("express");
 const mongoose = require("mongoose");
 const bcrypt = require("bcrypt");
-
 const cors = require("cors");
-const isAuthenticated = require("./middleware/is-authenticated");
-const User = require("./models/User");
-const app = express();
-
 const session = require("express-session");
 const MongoStore = require("connect-mongo");
+const jwt = require("jsonwebtoken"); // Import JWT
+const User = require("./models/User");
 
-// Connecting to MongoDB
-mongoose.connect(process.env.MONGODB_URI);
+const app = express();
 
-// Debugging the connection
+// Kết nối tới MongoDB
+mongoose.connect(process.env.MONGODB_URI, { useNewUrlParser: true, useUnifiedTopology: true });
+
 const db = mongoose.connection;
-
 db.on("error", console.error.bind(console, "connection error:"));
-db.once("open", function () {
-  console.log("Successfully connected to MongoDB!");
-});
+db.once("open", () => console.log("Successfully connected to MongoDB!"));
 
+// Middleware
 app.use(express.json());
+app.use(cors({
+  origin: "http://localhost:4200", // URL của frontend
+  credentials: true // Cho phép gửi cookie
+}));
 
-const corsOptions = {
-  origin: "http://localhost:4200", // Allow the frontend to connect to the server
-  credentials: true, // Allow credentials, required for sessions with authentication
+app.use(session({
+  secret: process.env.SUPER_SECRET_KEY,
+  resave: false,
+  saveUninitialized: true,
+  store: MongoStore.create({ mongoUrl: process.env.MONGODB_URI }),
+  cookie: { secure: "auto", httpOnly: true, maxAge: 1000 * 60 * 60 * 24 }
+}));
+
+// Middleware kiểm tra xác thực bằng JWT
+const isAuthenticated = (req, res, next) => {
+  const token = req.headers['authorization']?.split(' ')[1]; // Lấy token từ header
+
+  if (token) {
+    jwt.verify(token, process.env.SUPER_SECRET_KEY, (err, decoded) => {
+      if (err) {
+        return res.status(401).send({ message: "Unauthorized" });
+      }
+      req.user = decoded; // Lưu thông tin người dùng đã giải mã vào req.user
+      next();
+    });
+  } else {
+    return res.status(403).send({ message: "No token provided" });
+  }
 };
 
-// Enable CORS
-app.use(cors(corsOptions));
-
-// Middleware to create a session ID
-// When using req.session, the session ID will be stored in the cookie and the session data will be stored in memory (by default)
-app.use(
-  session({
-    secret: process.env.SUPER_SECRET_KEY, // Secret key for session
-    resave: false, // Avoids resaving sessions that haven't changed
-    saveUninitialized: true, // Saves new sessions
-    store: MongoStore.create({
-      mongoUrl: process.env.MONGODB_URI,
-      maxAge: 1000 * 60 * 60 * 24, // Time in milliseconds (1 day)
-    }), // Store the session in MongoDB, overrides the default memory store
-
-    // This configuration ensures that the cookie is sent over HTTPS (if available) and is not accessible through client-side scripts
-    cookie: { secure: "auto", httpOnly: true, maxAge: 1000 * 60 * 60 * 24 }, // Max age in milliseconds (1 day)
-  })
-);
-
-// Registration
+// Đăng ký người dùng
 app.post("/sign-up", async (req, res) => {
   try {
     const { username, email, password, role } = req.body;
-
-    // Kiểm tra nếu email hoặc username đã tồn tại
     const existingUser = await User.findOne({ $or: [{ email }, { username }] });
-    if (existingUser) {
-      return res.status(400).send({ message: "Username or email already taken." });
-    }
 
-    // Tạo người dùng mới với các thông tin cần thiết
-    const user = new User({ username, email, password, role });
-    await user.save(); // Middleware sẽ tự động mã hóa mật khẩu
+    if (existingUser) return res.status(400).send({ message: "Username or email already taken." });
 
+    const hashedPassword = await bcrypt.hash(password, 10); // Mã hóa mật khẩu
+    const user = new User({ username, email, password: hashedPassword, role });
+    await user.save();
     res.status(201).send({ message: "User registered successfully." });
   } catch (error) {
-    console.error("Error during registration:", error);
-    res.status(400).send({
-      message: "User registration failed.",
-      error: error.message || "Unknown error occurred"
-    });
+    res.status(400).send({ message: "User registration failed.", error: error.message || "Unknown error occurred" });
+  }
+});
+
+// Lấy thông tin vai trò người dùng
+app.get("/users/:userId/role", isAuthenticated, async (req, res) => {
+  try {
+    const { userId } = req.params; // Lấy userId từ tham số đường dẫn
+    const user = await User.findById(userId); // Tìm người dùng theo userId
+
+    if (!user) return res.status(404).send({ message: "User not found" }); // Nếu không tìm thấy người dùng
+
+    res.status(200).send({ role: user.role }); // Trả về vai trò của người dùng
+  } catch (error) {
+    res.status(500).send({ message: "Server error", error });
+  }
+});
+
+// Cập nhật vai trò người dùng (dành cho tất cả người dùng đã xác thực)
+app.put("/users/:userId/role", isAuthenticated, async (req, res) => {
+  try {
+    const { role } = req.body; // Nhận vai trò từ body
+    const { userId } = req.params; // userId ở đây là _id của người dùng
+
+    // Tiếp tục xử lý cập nhật vai trò
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).send({ message: "User not found" });
+
+    // Kiểm tra vai trò có hợp lệ hay không
+    const validRoles = ['user', 'student', 'teacher'];
+    if (!validRoles.includes(role)) {
+      return res.status(400).send({ message: `Current role is: ${user.role}` });
+    }
+
+    // Cập nhật vai trò người dùng
+    user.role = role;
+    user.updatedAt = Date.now();
+    await user.save();
+
+    res.status(200).send({ message: "Role updated successfully", user });
+  } catch (error) {
+    res.status(500).send({ message: "Server error", error });
   }
 });
 
 
-
-// Login
+// Đăng nhập người dùng
 app.post("/sign-in", async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -87,66 +119,53 @@ app.post("/sign-in", async (req, res) => {
       return res.status(401).send({ message: "Authentication failed" });
     }
 
-    // Set user information in session
-    req.session.user = { id: user._id, email: user.email };
-    res.status(200).send({ message: "Logged in successfully" }); // Set-Cookie header will be sent with the response
-  } catch (error) {
-    console.log(error);
-    res.status(500).send(error);
-  }
-});
+    // Tạo token
+    const token = jwt.sign({ id: user._id, email: user.email, role: user.role }, process.env.SUPER_SECRET_KEY, { expiresIn: '1h' });
 
-// Logout
-app.post("/logout", (req, res) => {
-  if (req.session) {
-    // Destroying the session
-    req.session.destroy((err) => {
-      if (err) {
-        return res
-          .status(500)
-          .send({ message: "Could not log out, please try again" });
-      } else {
-        res.send({ message: "Logout successful" });
-      }
+    res.status(200).send({
+      message: "Logged in successfully",
+      user: {
+        _id: user._id,
+        username: user.username,
+        email: user.email,
+        role: user.role
+      },
+      token // Gửi token về phía client
     });
-  } else {
-    res.status(400).send({ message: "You are not logged in" });
+  } catch (error) {
+    res.status(500).send({ message: "Server error", error });
   }
 });
 
-// Delete user, admin only
+// Đăng xuất người dùng
+app.post("/logout", (req, res) => {
+  req.session.destroy(err => {
+    if (err) return res.status(500).send({ message: "Could not log out, please try again" });
+    res.send({ message: "Logout successful" });
+  });
+});
+
+// Xóa người dùng (chỉ dành cho admin)
 app.delete("/user/:id", isAuthenticated, async (req, res) => {
   try {
-    const id = req.session.user.id;
-
-    const admin = await User.findById(id);
-
-    if (!admin || admin.role !== "admin") {
-      return res.status(401).send({ message: "Unauthorized" });
-    }
+    const admin = await User.findById(req.user.id);
+    if (!admin || admin.role !== "admin") return res.status(401).send({ message: "Unauthorized" });
 
     const user = await User.findById(req.params.id);
-    if (!user) {
-      return res.status(404).send({ message: "User not found" });
-    }
+    if (!user) return res.status(404).send({ message: "User not found" });
 
     await user.remove();
-
     res.send({ message: "User deleted successfully" });
   } catch (error) {
-    res.status(500).send(error);
+    res.status(500).send({ message: "Server error", error });
   }
 });
 
-// Using auth middleware to check if the user is authenticated
-// The middleware will check if the user is logged in by checking the session
-// If the user is logged in, the request will be passed to the endpoint
-// If the user is not logged in, the middleware will return a 401 status
+// Kiểm tra nếu người dùng đã xác thực
 app.get("/is-authenticated", isAuthenticated, (req, res) => {
-  res.status(200).send({ message: "Authenticated" });
+  res.status(200).send({ message: "Authenticated", user: req.user });
 });
 
+// Khởi động máy chủ
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Server is running on port ${PORT}`));
