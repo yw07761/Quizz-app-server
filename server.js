@@ -6,13 +6,16 @@ const bcrypt = require("bcrypt");
 const cors = require("cors");
 const session = require("express-session");
 const MongoStore = require("connect-mongo");
-const jwt = require("jsonwebtoken"); // Import JWT
+const jwt = require("jsonwebtoken");
 const User = require("./models/User");
 
 const app = express();
 
-// Kết nối tới MongoDB
-mongoose.connect(process.env.MONGODB_URI, { useNewUrlParser: true, useUnifiedTopology: true });
+// Kết nối MongoDB
+mongoose.connect(process.env.MONGODB_URI, { 
+  useNewUrlParser: true, 
+  useUnifiedTopology: true 
+});
 
 const db = mongoose.connection;
 db.on("error", console.error.bind(console, "connection error:"));
@@ -21,8 +24,8 @@ db.once("open", () => console.log("Successfully connected to MongoDB!"));
 // Middleware
 app.use(express.json());
 app.use(cors({
-  origin: "http://localhost:4200", // URL của frontend
-  credentials: true // Cho phép gửi cookie
+  origin: "http://localhost:4200",
+  credentials: true
 }));
 
 app.use(session({
@@ -33,40 +36,111 @@ app.use(session({
   cookie: { secure: "auto", httpOnly: true, maxAge: 1000 * 60 * 60 * 24 }
 }));
 
-// Middleware kiểm tra xác thực bằng JWT
-const isAuthenticated = (req, res, next) => {
-  const token = req.headers['authorization']?.split(' ')[1]; // Lấy token từ header
-
-  if (token) {
-    jwt.verify(token, process.env.SUPER_SECRET_KEY, (err, decoded) => {
-      if (err) {
-        return res.status(401).send({ message: "Unauthorized" });
-      }
-      req.user = decoded; // Lưu thông tin người dùng đã giải mã vào req.user
-      next();
-    });
-  } else {
-    return res.status(403).send({ message: "No token provided" });
-  }
-};
-
 // Đăng ký người dùng
 app.post("/sign-up", async (req, res) => {
   try {
-    const { username, email, password, role } = req.body;
+    const { username, email, password } = req.body;
+
+    // Kiểm tra user đã tồn tại
     const existingUser = await User.findOne({ $or: [{ email }, { username }] });
+    if (existingUser) {
+      return res.status(400).json({ message: "Email hoặc username đã được sử dụng." });
+    }
 
-    if (existingUser) return res.status(400).send({ message: "Username or email already taken." });
+    // Mã hóa mật khẩu
+    const hashedPassword = await bcrypt.hash(password, 10);
 
-    const hashedPassword = await bcrypt.hash(password, 10); // Mã hóa mật khẩu
-    const user = new User({ username, email, password: hashedPassword, role });
+    // Tạo user mới
+    const user = new User({ 
+      username, 
+      email, 
+      password: hashedPassword,
+      role: 'user'  // role mặc định
+    });
+
     await user.save();
-    res.status(201).send({ message: "User registered successfully." });
+
+    res.status(201).json({ 
+      message: "Đăng ký thành công.",
+      user: {
+        _id: user._id,
+        username: user.username,
+        email: user.email,
+        role: user.role
+      }
+    });
   } catch (error) {
-    res.status(400).send({ message: "User registration failed.", error: error.message || "Unknown error occurred" });
+    console.error('Lỗi đăng ký:', error);
+    res.status(500).json({ message: "Đăng ký thất bại.", error: error.message });
   }
 });
 
+// Đăng nhập người dùng
+app.post("/sign-in", async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    console.log('Thông tin đăng nhập:', { email, password });
+
+    // Tìm user theo email
+    const user = await User.findOne({ email });
+    console.log('User found:', user);
+
+    if (!user) {
+      return res.status(401).json({ message: "Email không tồn tại" });
+    }
+
+    // So sánh mật khẩu
+    const passwordMatch = await bcrypt.compare(password, user.password);
+    console.log('Password match:', passwordMatch);
+
+    if (!passwordMatch) {
+      return res.status(401).json({ message: "Mật khẩu không đúng" });
+    }
+
+    // Tạo JWT token
+    const token = jwt.sign(
+      { 
+        id: user._id, 
+        email: user.email, 
+        role: user.role 
+      }, 
+      process.env.SUPER_SECRET_KEY,
+      { expiresIn: '1h' }
+    );
+
+    // Trả về thông tin đăng nhập thành công
+    res.status(200).json({ 
+      token, 
+      user: {
+        _id: user._id,
+        username: user.username,
+        email: user.email,
+        role: user.role
+      }
+    });
+
+  } catch (error) {
+    console.error('Lỗi đăng nhập:', error);
+    res.status(500).json({ message: "Lỗi server", error: error.message });
+  }
+});
+
+// Middleware xác thực JWT
+const isAuthenticated = (req, res, next) => {
+  const token = req.headers['authorization']?.split(' ')[1];
+
+  if (!token) {
+    return res.status(403).json({ message: "Không có token" });
+  }
+
+  try {
+    const decoded = jwt.verify(token, process.env.SUPER_SECRET_KEY);
+    req.user = decoded;
+    next();
+  } catch (error) {
+    return res.status(401).json({ message: "Token không hợp lệ" });
+  }
+};
 // Lấy thông tin vai trò người dùng
 app.get("/users/:userId/role", isAuthenticated, async (req, res) => {
   try {
@@ -107,65 +181,21 @@ app.put("/users/:userId/role", isAuthenticated, async (req, res) => {
     res.status(500).send({ message: "Server error", error });
   }
 });
-
-
-// Đăng nhập người dùng
-app.post("/sign-in", async (req, res) => {
-  try {
-    const { email, password } = req.body;
-    const user = await User.findOne({ email });
-
-    if (!user || !(await bcrypt.compare(password, user.password))) {
-      return res.status(401).send({ message: "Authentication failed" });
-    }
-
-    // Tạo token
-    const token = jwt.sign({ id: user._id, email: user.email, role: user.role }, process.env.SUPER_SECRET_KEY, { expiresIn: '1h' });
-
-    res.status(200).send({
-      message: "Logged in successfully",
-      user: {
-        _id: user._id,
-        username: user.username,
-        email: user.email,
-        role: user.role
-      },
-      token // Gửi token về phía client
-    });
-  } catch (error) {
-    res.status(500).send({ message: "Server error", error });
-  }
+// API kiểm tra xác thực
+app.get("/check-auth", isAuthenticated, (req, res) => {
+  res.json({ user: req.user });
 });
 
-// Đăng xuất người dùng
+// Đăng xuất
 app.post("/logout", (req, res) => {
   req.session.destroy(err => {
-    if (err) return res.status(500).send({ message: "Could not log out, please try again" });
-    res.send({ message: "Logout successful" });
+    if (err) {
+      return res.status(500).json({ message: "Lỗi khi đăng xuất" });
+    }
+    res.json({ message: "Đăng xuất thành công" });
   });
 });
 
-// Xóa người dùng (chỉ dành cho admin)
-app.delete("/user/:id", isAuthenticated, async (req, res) => {
-  try {
-    const admin = await User.findById(req.user.id);
-    if (!admin || admin.role !== "admin") return res.status(401).send({ message: "Unauthorized" });
-
-    const user = await User.findById(req.params.id);
-    if (!user) return res.status(404).send({ message: "User not found" });
-
-    await user.remove();
-    res.send({ message: "User deleted successfully" });
-  } catch (error) {
-    res.status(500).send({ message: "Server error", error });
-  }
-});
-
-// Kiểm tra nếu người dùng đã xác thực
-app.get("/is-authenticated", isAuthenticated, (req, res) => {
-  res.status(200).send({ message: "Authenticated", user: req.user });
-});
-
-// Khởi động máy chủ
+// Khởi động server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server is running on port ${PORT}`));

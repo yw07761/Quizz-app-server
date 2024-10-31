@@ -1,10 +1,16 @@
 const isAuthenticated = (req, res, next) => {
-  if (req.session && req.session.user) {
-    console.log("User is authenticated:", req.session.user); // In ra thông tin người dùng
-    next(); // Người dùng đã đăng nhập
+  const token = req.headers['authorization']?.split(' ')[1]; // Lấy token từ header
+
+  if (token) {
+    jwt.verify(token, process.env.SUPER_SECRET_KEY, (err, decoded) => {
+      if (err) {
+        return res.status(401).send({ message: "Unauthorized" });
+      }
+      req.user = decoded; // Lưu thông tin người dùng đã giải mã vào req.user
+      next();
+    });
   } else {
-    console.log("Unauthorized access attempt");
-    res.status(401).send({ message: "Unauthorized" }); // Người dùng chưa đăng nhập
+    return res.status(403).send({ message: "No token provided" });
   }
 };
 
