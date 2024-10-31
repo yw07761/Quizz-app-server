@@ -53,23 +53,29 @@ app.use(
 // Registration
 app.post("/sign-up", async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { username, email, password, role } = req.body;
 
-    // Check if the username is already taken
-    const existing = await User.findOne({ email });
-
-    if (existing) {
-      return res.status(400).send({ message: "email already taken." });
+    // Kiểm tra nếu email hoặc username đã tồn tại
+    const existingUser = await User.findOne({ $or: [{ email }, { username }] });
+    if (existingUser) {
+      return res.status(400).send({ message: "Username or email already taken." });
     }
-    // Create a new user
-    const user = new User({ email, password });
-    await user.save();
+
+    // Tạo người dùng mới với các thông tin cần thiết
+    const user = new User({ username, email, password, role });
+    await user.save(); // Middleware sẽ tự động mã hóa mật khẩu
 
     res.status(201).send({ message: "User registered successfully." });
   } catch (error) {
-    res.status(400).send(error);
+    console.error("Error during registration:", error);
+    res.status(400).send({
+      message: "User registration failed.",
+      error: error.message || "Unknown error occurred"
+    });
   }
 });
+
+
 
 // Login
 app.post("/sign-in", async (req, res) => {
