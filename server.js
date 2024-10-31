@@ -53,16 +53,16 @@ app.use(
 // Registration
 app.post("/sign-up", async (req, res) => {
   try {
-    const { username, password } = req.body;
+    const { email, password } = req.body;
 
     // Check if the username is already taken
-    const existing = await User.findOne({ username });
+    const existing = await User.findOne({ email });
 
     if (existing) {
-      return res.status(400).send({ message: "Username already taken." });
+      return res.status(400).send({ message: "email already taken." });
     }
     // Create a new user
-    const user = new User({ username, password });
+    const user = new User({ email, password });
     await user.save();
 
     res.status(201).send({ message: "User registered successfully." });
@@ -74,15 +74,15 @@ app.post("/sign-up", async (req, res) => {
 // Login
 app.post("/sign-in", async (req, res) => {
   try {
-    const { username, password } = req.body;
-    const user = await User.findOne({ username });
+    const { email, password } = req.body;
+    const user = await User.findOne({ email });
 
     if (!user || !(await bcrypt.compare(password, user.password))) {
       return res.status(401).send({ message: "Authentication failed" });
     }
 
     // Set user information in session
-    req.session.user = { id: user._id, username: user.username };
+    req.session.user = { id: user._id, email: user.email };
     res.status(200).send({ message: "Logged in successfully" }); // Set-Cookie header will be sent with the response
   } catch (error) {
     console.log(error);
