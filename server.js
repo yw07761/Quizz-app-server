@@ -8,6 +8,7 @@ const session = require("express-session");
 const MongoStore = require("connect-mongo");
 const jwt = require("jsonwebtoken");
 const User = require("./models/User");
+const Question = require("./models/Question");
 
 const app = express();
 
@@ -195,6 +196,78 @@ app.post("/logout", (req, res) => {
     res.json({ message: "Đăng xuất thành công" });
   });
 });
+
+
+
+
+// Tạo câu hỏi mới
+app.post("/questions", async (req, res) => {
+  try {
+    const { text, answers, category, group } = req.body;
+
+    // Kiểm tra xem dữ liệu có đủ các trường cần thiết chưa
+    if (!text || !answers || answers.length < 2) {
+      return res.status(400).json({ message: "Thiếu dữ liệu cần thiết hoặc không đủ tùy chọn trả lời." });
+    }
+
+    // Đảm bảo chỉ có một đáp án đúng
+    const correctAnswers = answers.filter(answer => answer.isCorrect);
+    if (correctAnswers.length !== 1) {
+      return res.status(400).json({ message: "Câu hỏi phải có một và chỉ một đáp án đúng." });
+    }
+
+    // Tạo câu hỏi mới
+    const question = new Question({
+      text,
+      answers,
+      category,
+      group
+    });
+
+    // Lưu câu hỏi vào MongoDB
+    await question.save();
+
+    res.status(201).json({ 
+      message: "Tạo câu hỏi thành công.",
+      question 
+    });
+  } catch (error) {
+    console.error('Lỗi tạo câu hỏi:', error);
+    res.status(500).json({ message: "Tạo câu hỏi thất bại.", error: error.message });
+  }
+});
+
+// Endpoint API cho câu hỏi
+app.get("/questions", async (req, res) => {
+  try {
+    const questions = await Question.find();
+    res.json(questions);
+  } catch (error) {
+    res.status(500).json({ message: "Lỗi khi lấy danh sách câu hỏi", error: error.message });
+  }
+});
+app.put("/questions/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updatedQuestion = await Question.findByIdAndUpdate(id, req.body, { new: true });
+    if (!updatedQuestion) return res.status(404).json({ message: "Không tìm thấy câu hỏi" });
+    res.json(updatedQuestion);
+  } catch (error) {
+    res.status(500).json({ message: "Lỗi khi cập nhật câu hỏi", error: error.message });
+  }
+});
+
+app.delete("/questions/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const deletedQuestion = await Question.findByIdAndDelete(id);
+    if (!deletedQuestion) return res.status(404).json({ message: "Không tìm thấy câu hỏi" });
+    res.json({ message: "Đã xóa câu hỏi thành công" });
+  } catch (error) {
+    res.status(500).json({ message: "Lỗi khi xóa câu hỏi", error: error.message });
+  }
+});
+
 
 // Khởi động server
 const PORT = process.env.PORT || 3000;
