@@ -9,10 +9,11 @@ const MongoStore = require("connect-mongo");
 const jwt = require("jsonwebtoken");
 const User = require("./models/User");
 const Question = require("./models/Question");
+const Exam = require("./models/Exam");
 
 const app = express();
 
-// Kết nối MongoDB
+// Connect to MongoDB
 mongoose.connect(process.env.MONGODB_URI, { 
   useNewUrlParser: true, 
   useUnifiedTopology: true 
@@ -36,6 +37,7 @@ app.use(session({
   store: MongoStore.create({ mongoUrl: process.env.MONGODB_URI }),
   cookie: { secure: "auto", httpOnly: true, maxAge: 1000 * 60 * 60 * 24 }
 }));
+
 
 // Đăng ký người dùng
 app.post("/sign-up", async (req, res) => {
@@ -199,61 +201,69 @@ app.post("/logout", (req, res) => {
 
 
 
-
-// Tạo câu hỏi mới
-app.post("/questions", async (req, res) => {
+// Endpoint to Get a Question by _id or questionId
+app.get('/questions/:id', async (req, res) => {
   try {
-    const { text, answers, category, group } = req.body;
+    const id = req.params.id.trim(); // Loại bỏ khoảng trắng và ký tự xuống dòng
 
-    // Kiểm tra xem dữ liệu có đủ các trường cần thiết chưa
-    if (!text || !answers || answers.length < 2) {
-      return res.status(400).json({ message: "Thiếu dữ liệu cần thiết hoặc không đủ tùy chọn trả lời." });
+    // Kiểm tra tính hợp lệ của ObjectId
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: "Invalid question ID format" });
     }
 
-    // Đảm bảo chỉ có một đáp án đúng
-    const correctAnswers = answers.filter(answer => answer.isCorrect);
-    if (correctAnswers.length !== 1) {
-      return res.status(400).json({ message: "Câu hỏi phải có một và chỉ một đáp án đúng." });
+    const question = await Question.findById(id);
+    if (!question) {
+      return res.status(404).json({ message: "Question not found" });
     }
 
-    // Tạo câu hỏi mới
-    const question = new Question({
-      text,
-      answers,
-      category,
-      group
-    });
-
-    // Lưu câu hỏi vào MongoDB
-    await question.save();
-
-    res.status(201).json({ 
-      message: "Tạo câu hỏi thành công.",
-      question 
-    });
+    res.json(question);
   } catch (error) {
-    console.error('Lỗi tạo câu hỏi:', error);
-    res.status(500).json({ message: "Tạo câu hỏi thất bại.", error: error.message });
+    console.error("Error fetching question:", error); // Log lỗi chi tiết nếu có
+    res.status(500).json({ message: "Error fetching question", error: error.message });
   }
 });
 
-// Endpoint API cho câu hỏi
+
+
+// Other Question Endpoints
+app.post("/questions", async (req, res) => {
+  try {
+    const { text, answers, category, group } = req.body;
+    if (!text || !answers || answers.length < 2) {
+      return res.status(400).json({ message: "Insufficient data" });
+    }
+    const correctAnswers = answers.filter(answer => answer.isCorrect);
+    if (correctAnswers.length !== 1) {
+      return res.status(400).json({ message: "There must be exactly one correct answer" });
+    }
+
+    const question = new Question({ text, answers, category, group });
+    await question.save();
+
+    res.status(201).json({ message: "Question created successfully", question });
+  } catch (error) {
+    console.error("Error creating question:", error);
+    res.status(500).json({ message: "Failed to create question", error: error.message });
+  }
+});
+
 app.get("/questions", async (req, res) => {
   try {
     const questions = await Question.find();
     res.json(questions);
   } catch (error) {
-    res.status(500).json({ message: "Lỗi khi lấy danh sách câu hỏi", error: error.message });
+    res.status(500).json({ message: "Error fetching questions", error: error.message });
   }
 });
+
 app.put("/questions/:id", async (req, res) => {
   try {
     const { id } = req.params;
     const updatedQuestion = await Question.findByIdAndUpdate(id, req.body, { new: true });
-    if (!updatedQuestion) return res.status(404).json({ message: "Không tìm thấy câu hỏi" });
+    if (!updatedQuestion) return res.status(404).json({ message: "Question not found" });
     res.json(updatedQuestion);
   } catch (error) {
-    res.status(500).json({ message: "Lỗi khi cập nhật câu hỏi", error: error.message });
+    res.status(500).json({ message: "Error updating question", error: error.message });
   }
 });
 
@@ -261,14 +271,101 @@ app.delete("/questions/:id", async (req, res) => {
   try {
     const { id } = req.params;
     const deletedQuestion = await Question.findByIdAndDelete(id);
-    if (!deletedQuestion) return res.status(404).json({ message: "Không tìm thấy câu hỏi" });
-    res.json({ message: "Đã xóa câu hỏi thành công" });
+    if (!deletedQuestion) return res.status(404).json({ message: "Question not found" });
+    res.json({ message: "Question deleted successfully" });
   } catch (error) {
-    res.status(500).json({ message: "Lỗi khi xóa câu hỏi", error: error.message });
+    res.status(500).json({ message: "Error deleting question", error: error.message });
+  }
+});
+
+// Exam Endpoints
+app.post('/exams', async (req, res) => {
+  try {
+    const { name, description, startDate, endDate, maxAttempts, duration, maxScore, autoDistributeScore, showStudentResult, displayResults, questionOrder, questionsPerPage, sections } = req.body;
+
+    const transformedSections = sections.map(section => ({
+      title: section.title,
+      questions: section.questions.map(question => ({
+        questionId: question._id, // Chỉ lưu `questionId` của câu hỏi
+        score: question.score || 1
+      }))
+    }));
+
+    const exam = new Exam({
+      name,
+      description,
+      startDate,
+      endDate,
+      maxAttempts,
+      duration,
+      maxScore,
+      autoDistributeScore,
+      showStudentResult,
+      displayResults,
+      questionOrder,
+      questionsPerPage,
+      sections: transformedSections
+    });
+
+    await exam.save();
+    res.status(201).json(exam);
+  } catch (error) {
+    console.error("Error saving exam:", error);
+    res.status(500).json({ error: error.message });
   }
 });
 
 
-// Khởi động server
+
+app.get('/exams', async (req, res) => {
+  try {
+    const exams = await Exam.find();
+    res.json(exams);
+  } catch (error) {
+    res.status(500).json({ message: "Error fetching exams", error: error.message });
+  }
+});
+app.get('/exams/:id', async (req, res) => {
+  try {
+    const exam = await Exam.findById(req.params.id).populate('sections.questions.questionId');
+    if (!exam) {
+      return res.status(404).json({ message: "Exam not found" });
+    }
+    res.json(exam);
+  } catch (error) {
+    console.error("Error fetching exam:", error);
+    res.status(500).json({ message: "Error fetching exam", error: error.message });
+  }
+});
+
+
+
+
+
+app.put('/exams/:id', async (req, res) => {
+  try {
+    const exam = await Exam.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    if (!exam) {
+      return res.status(404).json({ message: "Exam not found" });
+    }
+    res.json(exam);
+  } catch (error) {
+    res.status(500).json({ message: "Error updating exam", error: error.message });
+  }
+});
+
+app.delete('/exams/:id', async (req, res) => {
+  try {
+    const exam = await Exam.findByIdAndDelete(req.params.id);
+    if (!exam) {
+      return res.status(404).json({ message: "Exam not found" });
+    }
+    res.json({ message: "Exam deleted successfully" });
+  } catch (error) {
+    res.status(500).json({ message: "Error deleting exam", error: error.message });
+  }
+});
+
+// Start the server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server is running on port ${PORT}`));
