@@ -1,16 +1,16 @@
 const mongoose = require('mongoose');
 const { Schema } = mongoose;
 
-const questionSchema = new Schema({
-  questionId: { type: mongoose.Types.ObjectId, required: true },
-  score: { type: Number, default: 0 }
-});
-
 const sectionSchema = new Schema({
   title: { type: String, required: true },
-  description: { type: String, required: true },
-  questions: [questionSchema] // Đảm bảo `questions` là một mảng các đối tượng `questionSchema`
+  questions: [
+    {
+      questionId: { type: Schema.Types.ObjectId, ref: 'Question', required: true }, // Tham chiếu đến câu hỏi
+      score: { type: Number, default: 1 }
+    }
+  ]
 });
+
 
 const examSchema = new Schema({
   name: { type: String, required: true },
@@ -25,9 +25,10 @@ const examSchema = new Schema({
   displayResults: String,
   questionOrder: String,
   questionsPerPage: Number,
-  sections: [sectionSchema], // Đảm bảo `sections` là một mảng các đối tượng `sectionSchema`
+  sections: [sectionSchema],
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
 });
+
 
 module.exports = mongoose.model('Exam', examSchema);
