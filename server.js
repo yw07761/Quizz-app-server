@@ -10,6 +10,8 @@ const jwt = require("jsonwebtoken");
 const User = require("./models/User");
 const Question = require("./models/Question");
 const Exam = require("./models/Exam");
+const Class = require("./models/Class"); 
+
 
 const app = express();
 
@@ -281,12 +283,15 @@ app.delete("/questions/:id", async (req, res) => {
 // Exam Endpoints
 app.post('/exams', async (req, res) => {
   try {
+    // Log `req.body` để kiểm tra dữ liệu nhận được từ frontend
+    console.log('Exam data received:', req.body);
+
     const { name, description, startDate, endDate, maxAttempts, duration, maxScore, autoDistributeScore, showStudentResult, displayResults, questionOrder, questionsPerPage, sections } = req.body;
 
     const transformedSections = sections.map(section => ({
       title: section.title,
       questions: section.questions.map(question => ({
-        questionId: question._id, // Chỉ lưu `questionId` của câu hỏi
+        questionId: question.questionId, // Đảm bảo chỉ lưu `questionId`
         score: question.score || 1
       }))
     }));
@@ -317,6 +322,7 @@ app.post('/exams', async (req, res) => {
 
 
 
+
 app.get('/exams', async (req, res) => {
   try {
     const exams = await Exam.find();
@@ -337,9 +343,6 @@ app.get('/exams/:id', async (req, res) => {
     res.status(500).json({ message: "Error fetching exam", error: error.message });
   }
 });
-
-
-
 
 
 app.put('/exams/:id', async (req, res) => {
@@ -365,6 +368,102 @@ app.delete('/exams/:id', async (req, res) => {
     res.status(500).json({ message: "Error deleting exam", error: error.message });
   }
 });
+
+
+// CLASS
+// Tạo mới một lớp học
+app.post("/classes", isAuthenticated, async (req, res) => {
+  try {
+    const { classId, className, schedule, teacherId, startDate, endDate, maxStudents, location } = req.body;
+
+    // Tạo lớp học mới
+    const newClass = new Class({
+      classId,
+      className,
+      schedule,
+      teacher: teacherId, 
+      startDate,
+      endDate,
+      maxStudents,
+      location
+    });
+
+    await newClass.save();
+
+    res.status(201).json({ message: "Class created successfully", class: newClass });
+  } catch (error) {
+    console.error("Error creating class:", error);
+    res.status(500).json({ message: "Error creating class", error: error.message });
+  }
+});
+
+// Lấy danh sách các lớp học
+app.get("/classes", isAuthenticated, async (req, res) => {
+  try {
+    const classes = await Class.find().populate('teacher', 'username email'); // Populate để lấy thông tin giáo viên
+    res.json(classes);
+  } catch (error) {
+    res.status(500).json({ message: "Error fetching classes", error: error.message });
+  }
+});
+
+// Lấy thông tin chi tiết của một lớp học theo ID
+app.get("/classes/:id", isAuthenticated, async (req, res) => {
+  try {
+    const classData = await Class.findById(req.params.id).populate('teacher', 'username email').populate('students', 'username email');
+    if (!classData) return res.status(404).json({ message: "Class not found" });
+    res.json(classData);
+  } catch (error) {
+    res.status(500).json({ message: "Error fetching class", error: error.message });
+  }
+});
+
+// Cập nhật thông tin lớp học
+app.put("/classes/:id", isAuthenticated, async (req, res) => {
+  try {
+    const updatedClass = await Class.findByIdAndUpdate(req.params.id, req.body, { new: true }).populate('teacher', 'username email').populate('students', 'username email');
+    if (!updatedClass) return res.status(404).json({ message: "Class not found" });
+    res.json({ message: "Class updated successfully", class: updatedClass });
+  } catch (error) {
+    res.status(500).json({ message: "Error updating class", error: error.message });
+  }
+});
+
+// Xóa một lớp học
+app.delete("/classes/:id", isAuthenticated, async (req, res) => {
+  try {
+    const deletedClass = await Class.findByIdAndDelete(req.params.id);
+    if (!deletedClass) return res.status(404).json({ message: "Class not found" });
+    res.json({ message: "Class deleted successfully" });
+  } catch (error) {
+    res.status(500).json({ message: "Error deleting class", error: error.message });
+  }
+});
+
+// Thêm sinh viên vào lớp
+app.post("/classes/:id/add-student", isAuthenticated, async (req, res) => {
+  try {
+    const { studentId } = req.body;
+    const classData = await Class.findById(req.params.id);
+
+    if (!classData) return res.status(404).json({ message: "Class not found" });
+
+    // Kiểm tra nếu sinh viên đã có trong lớp
+    if (classData.students.includes(studentId)) {
+      return res.status(400).json({ message: "Student already enrolled in class" });
+    }
+
+    // Thêm sinh viên vào lớp
+    classData.students.push(studentId);
+    classData.currentStudents = classData.students.length;
+    await classData.save();
+
+    res.json({ message: "Student added successfully", class: classData });
+  } catch (error) {
+    res.status(500).json({ message: "Error adding student", error: error.message });
+  }
+});
+
 
 // Start the server
 const PORT = process.env.PORT || 3000;
