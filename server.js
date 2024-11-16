@@ -383,60 +383,163 @@ app.delete('/exams/:id', async (req, res) => {
   }
 });
 // API nộp bài thi
+// API route for submitting exam
+// examController.js
 app.post('/exams/:id/submit', isAuthenticated, async (req, res) => {
   try {
     const { id } = req.params;
-    const { answers } = req.body;
+    const { answers, startTime, endTime } = req.body;
 
-    // Fetch the exam and correct answers from the database
+    // Validate input data
+    if (!Array.isArray(answers) || answers.length === 0) {
+      return res.status(400).json({
+        message: 'Answers must be a non-empty array'
+      });
+    }
+
+    if (!startTime || !endTime) {
+      return res.status(400).json({
+        message: 'Start time and end time are required'
+      });
+    }
+
+    // Validate date formats
+    const startTimeDate = new Date(startTime);
+    const endTimeDate = new Date(endTime);
+
+    if (isNaN(startTimeDate.getTime()) || isNaN(endTimeDate.getTime())) {
+      return res.status(400).json({
+        message: 'Invalid date format for start time or end time'
+      });
+    }
+
+    // Fetch exam with populated questions
     const exam = await Exam.findById(id).populate('sections.questions.questionId');
     if (!exam) {
       return res.status(404).json({ message: "Exam not found" });
     }
 
-    let score = 0;
-    const totalQuestions = exam.sections.reduce((count, section) => count + section.questions.length, 0);
+    // Validate if exam is still active
+    const now = new Date();
+    if (now > new Date(exam.endDate)) {
+      return res.status(400).json({
+        message: "Exam has expired"
+      });
+    }
 
-    // Calculate score
-    exam.sections.forEach((section) => {
-      section.questions.forEach((question) => {
-        const correctAnswer = question.questionId.answers.find((answer) => answer.isCorrect);
-        const studentAnswer = answers[question._id];
-        if (correctAnswer && studentAnswer === correctAnswer.text) {
-          score += 1; // Increment score for each correct answer
+    let totalScore = 0;
+    let maxScore = 0;
+
+    // Create answers map for easier lookup
+    const answersMap = new Map(answers.map(a => [a.questionId, a]));
+
+    // Validate all answers and calculate scores
+    const formattedAnswers = [];
+
+    exam.sections.forEach(section => {
+      section.questions.forEach(question => {
+        const studentAnswer = answersMap.get(question._id.toString());
+        const correctAnswer = question.questionId.answers.find(a => a.isCorrect);
+        
+        // Add to formatted answers even if not answered
+        formattedAnswers.push({
+          questionId: question._id.toString(),
+          answer: studentAnswer?.answer || '',
+          timestamp: studentAnswer ? new Date(studentAnswer.timestamp) : new Date()
+        });
+
+        if (correctAnswer && studentAnswer && studentAnswer.answer === correctAnswer.text) {
+          totalScore += question.score || 1;
         }
+        maxScore += question.score || 1;
       });
     });
 
-    const percentageScore = (score / totalQuestions) * 10;
+    const percentageScore = (totalScore / maxScore) * 100;
 
-    // Save result to database
-    const result = new ExamResult({
-      studentId: req.user.id, // Now req.user should be set by isAuthenticated middleware
+    // Create exam result
+    const examResult = await ExamResult.create({
+      studentId: req.user.id,
       examId: id,
-      score,
-      percentageScore,
-      date: new Date()
+      answers: formattedAnswers,
+      startTime: startTimeDate,
+      endTime: endTimeDate,
+      score: totalScore,
+      percentageScore
     });
-    await result.save();
 
-    res.json({ score, percentageScore });
+    // Prepare result response
+    const result = {
+      id: examResult._id,
+      score: totalScore,
+      maxScore,
+      percentageScore,
+      startTime: examResult.startTime,
+      endTime: examResult.endTime,
+      duration: Math.round((endTimeDate - startTimeDate) / 1000 / 60),
+      sections: exam.sections.map(section => ({
+        sectionId: section._id,
+        title: section.title,
+        questions: section.questions.map(question => {
+          const studentAnswer = answersMap.get(question._id.toString());
+          const correctAnswer = question.questionId.answers.find(a => a.isCorrect);
+          return {
+            questionId: question._id,
+            questionText: question.questionId.text,
+            studentAnswer: studentAnswer?.answer || '',
+            isCorrect: correctAnswer?.text === studentAnswer?.answer,
+            score: (correctAnswer?.text === studentAnswer?.answer) ? (question.score || 1) : 0
+          };
+        })
+      }))
+    };
+
+    res.json(result);
+
   } catch (error) {
-    res.status(500).json({ message: "Error submitting exam", error: error.message });
+    console.error('Submit exam error:', error);
+    res.status(500).json({
+      message: "Error submitting exam",
+      error: error.message
+    });
   }
 });
 
-// route for getting exam results by user ID
+// API lấy kết quả của user
 app.get('/exams/user/:userId/results', isAuthenticated, async (req, res) => {
-  const { userId } = req.params;
   try {
-    const results = await ExamResult.find({ studentId: userId }).populate('examId');
-    if (!results) return res.status(404).json({ message: "No results found" });
-    res.json(results);
+    const { userId } = req.params;
+    
+    const results = await ExamResult.find({ studentId: userId })
+      .populate('examId')
+      .sort({ endTime: -1 });
+
+    if (!results || results.length === 0) {
+      return res.status(404).json({ message: "No results found" });
+    }
+
+    // Format kết quả trả về
+    const formattedResults = results.map(result => ({
+      id: result._id,
+      examName: result.examId.name,
+      score: result.score,
+      percentageScore: result.percentageScore,
+      startTime: result.startTime,
+      endTime: result.endTime,
+      duration: Math.round((result.endTime - result.startTime) / 1000 / 60)
+    }));
+
+    res.json(formattedResults);
+
   } catch (error) {
-    res.status(500).json({ message: "Error fetching results", error: error.message });
+    console.error('Error fetching results:', error);
+    res.status(500).json({ 
+      message: "Error fetching results", 
+      error: error.message 
+    });
   }
 });
+
 
 
 
