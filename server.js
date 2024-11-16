@@ -11,6 +11,7 @@ const User = require("./models/User");
 const Question = require("./models/Question");
 const Exam = require("./models/Exam");
 const Class = require("./models/Class"); 
+const ExamResult = require('./models/ExamResult');
 
 
 const app = express();
@@ -39,7 +40,6 @@ app.use(session({
   store: MongoStore.create({ mongoUrl: process.env.MONGODB_URI }),
   cookie: { secure: "auto", httpOnly: true, maxAge: 1000 * 60 * 60 * 24 }
 }));
-
 
 // Đăng ký người dùng
 app.post("/sign-up", async (req, res) => {
@@ -385,42 +385,60 @@ app.delete('/exams/:id', async (req, res) => {
 // API nộp bài thi
 app.post('/exams/:id/submit', isAuthenticated, async (req, res) => {
   try {
-    const { answers } = req.body; // Nhận câu trả lời từ body
-    const examId = req.params.id;
+    const { id } = req.params;
+    const { answers } = req.body;
 
-    // Kiểm tra xem bài thi có tồn tại không
-    const exam = await Exam.findById(examId);
+    // Fetch the exam and correct answers from the database
+    const exam = await Exam.findById(id).populate('sections.questions.questionId');
     if (!exam) {
       return res.status(404).json({ message: "Exam not found" });
     }
 
-    // Tính điểm
     let score = 0;
-    exam.sections.forEach(section => {
-      section.questions.forEach(question => {
-        const answer = answers.find(a => a.questionId === question.questionId.toString());
-        if (answer && answer.isCorrect) {
-          score += question.score; // Tăng điểm theo câu hỏi
+    const totalQuestions = exam.sections.reduce((count, section) => count + section.questions.length, 0);
+
+    // Calculate score
+    exam.sections.forEach((section) => {
+      section.questions.forEach((question) => {
+        const correctAnswer = question.questionId.answers.find((answer) => answer.isCorrect);
+        const studentAnswer = answers[question._id];
+        if (correctAnswer && studentAnswer === correctAnswer.text) {
+          score += 1; // Increment score for each correct answer
         }
       });
     });
 
-    // Lưu kết quả vào cơ sở dữ liệu
-    const result = new Result({
-      exam: examId,
-      student: req.user.id, // ID của sinh viên
-      score: score,
-      submittedAt: Date.now()
-    });
+    const percentageScore = (score / totalQuestions) * 10;
 
+    // Save result to database
+    const result = new ExamResult({
+      studentId: req.user.id, // Now req.user should be set by isAuthenticated middleware
+      examId: id,
+      score,
+      percentageScore,
+      date: new Date()
+    });
     await result.save();
 
-    res.status(201).json({ message: "Exam submitted successfully", score });
+    res.json({ score, percentageScore });
   } catch (error) {
-    console.error("Error submitting exam:", error);
     res.status(500).json({ message: "Error submitting exam", error: error.message });
   }
 });
+
+// route for getting exam results by user ID
+app.get('/exams/user/:userId/results', isAuthenticated, async (req, res) => {
+  const { userId } = req.params;
+  try {
+    const results = await ExamResult.find({ studentId: userId }).populate('examId');
+    if (!results) return res.status(404).json({ message: "No results found" });
+    res.json(results);
+  } catch (error) {
+    res.status(500).json({ message: "Error fetching results", error: error.message });
+  }
+});
+
+
 
 
 
@@ -525,29 +543,8 @@ app.post("/classes/:id/add-student", isAuthenticated, async (req, res) => {
 });
 
 
-// Lấy kết quả bài thi theo ID
-app.get('/results/:id', isAuthenticated, async (req, res) => {
-  try {
-    const result = await Result.findById(req.params.id).populate('exam student');
-    if (!result) {
-      return res.status(404).json({ message: "Result not found" });
-    }
-    res.json(result);
-  } catch (error) {
-    console.error("Error fetching result:", error);
-    res.status(500).json({ message: "Error fetching result", error: error.message });
-  }
-});
-// Lấy danh sách bài thi đã làm của học sinh
-app.get('/users/:userId/results', isAuthenticated, async (req, res) => {
-  try {
-    const results = await Result.find({ student: req.params.id }).populate('exam');
-    res.json(results);
-  } catch (error) {
-    console.error("Error fetching results:", error);
-    res.status(500).json({ message: "Error fetching results", error: error.message });
-  }
-});
+
+
 
 // Start the server
 const PORT = process.env.PORT || 3000;
