@@ -384,7 +384,6 @@ app.delete('/exams/:id', async (req, res) => {
 });
 // API nộp bài thi
 // API route for submitting exam
-// examController.js
 app.post('/exams/:id/submit', isAuthenticated, async (req, res) => {
   try {
     const { id } = req.params;
@@ -505,44 +504,76 @@ app.post('/exams/:id/submit', isAuthenticated, async (req, res) => {
   }
 });
 
-// API lấy kết quả của user
+// API endpoint để lấy kết quả của user
 app.get('/exams/user/:userId/results', isAuthenticated, async (req, res) => {
   try {
     const { userId } = req.params;
     
+    // Lấy kết quả và populate examId
     const results = await ExamResult.find({ studentId: userId })
-      .populate('examId')
+      .populate({
+        path: 'examId',
+        select: 'name maxScore duration' // Chỉ lấy các trường cần thiết
+      })
       .sort({ endTime: -1 });
 
     if (!results || results.length === 0) {
       return res.status(404).json({ message: "No results found" });
     }
 
-    // Format kết quả trả về
-    const formattedResults = results.map(result => ({
-      id: result._id,
-      examName: result.examId.name,
-      score: result.score,
-      percentageScore: result.percentageScore,
-      startTime: result.startTime,
-      endTime: result.endTime,
-      duration: Math.round((result.endTime - result.startTime) / 1000 / 60)
-    }));
+    // Format kết quả và xử lý trường hợp examId null
+    const formattedResults = results.map(result => {
+      // Kiểm tra nếu examId là null hoặc undefined
+      const examInfo = result.examId || {
+        name: 'Bài thi đã bị xóa',
+        maxScore: result.maxScore || 100, // Sử dụng maxScore từ result nếu có
+        duration: 0
+      };
+
+      return {
+        id: result._id,
+        examId: result.examId ? result.examId._id : null,
+        examName: examInfo.name,
+        description: examInfo.description || 'Không có mô tả',
+        score: result.score,
+        maxScore: examInfo.maxScore,
+        percentageScore: result.percentageScore,
+        startTime: result.startTime,
+        endTime: result.endTime,
+        duration: Math.round((new Date(result.endTime) - new Date(result.startTime)) / 1000 / 60),
+        answers: result.answers || [],
+        status: result.examId ? 'completed' : 'deleted'
+      };
+    });
 
     res.json(formattedResults);
-
   } catch (error) {
     console.error('Error fetching results:', error);
-    res.status(500).json({ 
-      message: "Error fetching results", 
+    res.status(500).json({
+      message: "Error fetching results",
       error: error.message 
     });
   }
 });
 
+// Middleware để kiểm tra và xử lý kết quả thi trước khi lưu
+const validateExamResult = async (req, res, next) => {
+  try {
+    const { examId } = req.params;
+    const exam = await Exam.findById(examId);
+    
+    if (!exam) {
+      return res.status(404).json({ message: "Exam not found" });
+    }
 
-
-
+    // Lưu thông tin exam vào request để sử dụng ở middleware tiếp theo
+    req.exam = exam;
+    next();
+  } catch (error) {
+    console.error('Validation error:', error);
+    res.status(500).json({ message: "Error validating exam result" });
+  }
+};
 
 
 
