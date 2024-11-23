@@ -10,6 +10,9 @@ const jwt = require("jsonwebtoken");
 const User = require("./models/User");
 const Question = require("./models/Question");
 const Exam = require("./models/Exam");
+const Class = require("./models/Class"); 
+const ExamResult = require('./models/ExamResult');
+
 
 const app = express();
 
@@ -37,7 +40,6 @@ app.use(session({
   store: MongoStore.create({ mongoUrl: process.env.MONGODB_URI }),
   cookie: { secure: "auto", httpOnly: true, maxAge: 1000 * 60 * 60 * 24 }
 }));
-
 
 // Đăng ký người dùng
 app.post("/sign-up", async (req, res) => {
@@ -198,6 +200,16 @@ app.post("/logout", (req, res) => {
     res.json({ message: "Đăng xuất thành công" });
   });
 });
+// API lấy danh sách người dùng
+app.get("/users", isAuthenticated, async (req, res) => {
+  try {
+    const users = await User.find();
+    res.status(200).json(users); // Trả về danh sách người dùng
+  } catch (error) {
+    res.status(500).send({ message: "Lỗi khi tải danh sách người dùng", error });
+  }
+});
+
 
 
 
@@ -279,18 +291,35 @@ app.delete("/questions/:id", async (req, res) => {
 });
 
 // Exam Endpoints
-app.post('/exams', async (req, res) => {
+app.post('/exams', isAuthenticated, async (req, res) => {
   try {
-    const { name, description, startDate, endDate, maxAttempts, duration, maxScore, autoDistributeScore, showStudentResult, displayResults, questionOrder, questionsPerPage, sections } = req.body;
+    console.log('Exam data received:', req.body);
+
+    const {
+      name,
+      description,
+      startDate,
+      endDate,
+      maxAttempts,
+      duration,
+      maxScore,
+      autoDistributeScore,
+      showStudentResult,
+      displayResults,
+      questionOrder,
+      questionsPerPage,
+      sections
+    } = req.body;
 
     const transformedSections = sections.map(section => ({
       title: section.title,
       questions: section.questions.map(question => ({
-        questionId: question._id, // Chỉ lưu `questionId` của câu hỏi
+        questionId: question.questionId,
         score: question.score || 1
       }))
     }));
 
+    // Set createdBy to the logged-in user's ID (from req.user)
     const exam = new Exam({
       name,
       description,
@@ -304,7 +333,8 @@ app.post('/exams', async (req, res) => {
       displayResults,
       questionOrder,
       questionsPerPage,
-      sections: transformedSections
+      sections: transformedSections,
+      createdBy: req.user.id // Set createdBy to the authenticated user's ID
     });
 
     await exam.save();
@@ -314,17 +344,17 @@ app.post('/exams', async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
-
-
-
 app.get('/exams', async (req, res) => {
   try {
-    const exams = await Exam.find();
+    const status = req.query.status; // Get status from query parameter
+    const filter = status ? { status } : {}; // Set filter only if status is provided
+    const exams = await Exam.find(filter); // Query with filter
     res.json(exams);
   } catch (error) {
     res.status(500).json({ message: "Error fetching exams", error: error.message });
   }
 });
+
 app.get('/exams/:id', async (req, res) => {
   try {
     const exam = await Exam.findById(req.params.id).populate('sections.questions.questionId');
@@ -337,9 +367,6 @@ app.get('/exams/:id', async (req, res) => {
     res.status(500).json({ message: "Error fetching exam", error: error.message });
   }
 });
-
-
-
 
 
 app.put('/exams/:id', async (req, res) => {
@@ -365,6 +392,303 @@ app.delete('/exams/:id', async (req, res) => {
     res.status(500).json({ message: "Error deleting exam", error: error.message });
   }
 });
+// API nộp bài thi
+// API route for submitting exam
+app.post('/exams/:id/submit', isAuthenticated, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { answers, startTime, endTime } = req.body;
+
+    // Validate input data
+    if (!Array.isArray(answers) || answers.length === 0) {
+      return res.status(400).json({
+        message: 'Answers must be a non-empty array'
+      });
+    }
+
+    if (!startTime || !endTime) {
+      return res.status(400).json({
+        message: 'Start time and end time are required'
+      });
+    }
+
+    // Validate date formats
+    const startTimeDate = new Date(startTime);
+    const endTimeDate = new Date(endTime);
+
+    if (isNaN(startTimeDate.getTime()) || isNaN(endTimeDate.getTime())) {
+      return res.status(400).json({
+        message: 'Invalid date format for start time or end time'
+      });
+    }
+
+    // Fetch exam with populated questions
+    const exam = await Exam.findById(id).populate('sections.questions.questionId');
+    if (!exam) {
+      return res.status(404).json({ message: "Exam not found" });
+    }
+
+    // Validate if exam is still active
+    const now = new Date();
+    if (now > new Date(exam.endDate)) {
+      return res.status(400).json({
+        message: "Exam has expired"
+      });
+    }
+
+    let totalScore = 0;
+    let maxScore = 0;
+
+    // Create answers map for easier lookup
+    const answersMap = new Map(answers.map(a => [a.questionId, a]));
+
+    // Validate all answers and calculate scores
+    const formattedAnswers = [];
+
+    exam.sections.forEach(section => {
+      section.questions.forEach(question => {
+        const studentAnswer = answersMap.get(question._id.toString());
+        const correctAnswer = question.questionId.answers.find(a => a.isCorrect);
+        
+        // Add to formatted answers even if not answered
+        formattedAnswers.push({
+          questionId: question._id.toString(),
+          answer: studentAnswer?.answer || '',
+          timestamp: studentAnswer ? new Date(studentAnswer.timestamp) : new Date()
+        });
+
+        if (correctAnswer && studentAnswer && studentAnswer.answer === correctAnswer.text) {
+          totalScore += question.score || 1;
+        }
+        maxScore += question.score || 1;
+      });
+    });
+
+    const percentageScore = (totalScore / maxScore) * 100;
+
+    // Create exam result
+    const examResult = await ExamResult.create({
+      studentId: req.user.id,
+      examId: id,
+      answers: formattedAnswers,
+      startTime: startTimeDate,
+      endTime: endTimeDate,
+      score: totalScore,
+      percentageScore
+    });
+
+    // Prepare result response
+    const result = {
+      id: examResult._id,
+      score: totalScore,
+      maxScore,
+      percentageScore,
+      startTime: examResult.startTime,
+      endTime: examResult.endTime,
+      duration: Math.round((endTimeDate - startTimeDate) / 1000 / 60),
+      sections: exam.sections.map(section => ({
+        sectionId: section._id,
+        title: section.title,
+        questions: section.questions.map(question => {
+          const studentAnswer = answersMap.get(question._id.toString());
+          const correctAnswer = question.questionId.answers.find(a => a.isCorrect);
+          return {
+            questionId: question._id,
+            questionText: question.questionId.text,
+            studentAnswer: studentAnswer?.answer || '',
+            isCorrect: correctAnswer?.text === studentAnswer?.answer,
+            score: (correctAnswer?.text === studentAnswer?.answer) ? (question.score || 1) : 0
+          };
+        })
+      }))
+    };
+
+    res.json(result);
+
+  } catch (error) {
+    console.error('Submit exam error:', error);
+    res.status(500).json({
+      message: "Error submitting exam",
+      error: error.message
+    });
+  }
+});
+
+// API endpoint để lấy kết quả của user
+app.get('/exams/user/:userId/results', isAuthenticated, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    // Lấy kết quả và populate examId
+    const results = await ExamResult.find({ studentId: userId })
+      .populate({
+        path: 'examId',
+        select: 'name maxScore duration' // Chỉ lấy các trường cần thiết
+      })
+      .sort({ endTime: -1 });
+
+    if (!results || results.length === 0) {
+      return res.status(404).json({ message: "No results found" });
+    }
+
+    // Format kết quả và xử lý trường hợp examId null
+    const formattedResults = results.map(result => {
+      // Kiểm tra nếu examId là null hoặc undefined
+      const examInfo = result.examId || {
+        name: 'Bài thi đã bị xóa',
+        maxScore: result.maxScore || 100, // Sử dụng maxScore từ result nếu có
+        duration: 0
+      };
+
+      return {
+        id: result._id,
+        examId: result.examId ? result.examId._id : null,
+        examName: examInfo.name,
+        description: examInfo.description || 'Không có mô tả',
+        score: result.score,
+        maxScore: examInfo.maxScore,
+        percentageScore: result.percentageScore,
+        startTime: result.startTime,
+        endTime: result.endTime,
+        duration: Math.round((new Date(result.endTime) - new Date(result.startTime)) / 1000 / 60),
+        answers: result.answers || [],
+        status: result.examId ? 'completed' : 'deleted'
+      };
+    });
+
+    res.json(formattedResults);
+  } catch (error) {
+    console.error('Error fetching results:', error);
+    res.status(500).json({
+      message: "Error fetching results",
+      error: error.message 
+    });
+  }
+});
+
+// Middleware để kiểm tra và xử lý kết quả thi trước khi lưu
+const validateExamResult = async (req, res, next) => {
+  try {
+    const { examId } = req.params;
+    const exam = await Exam.findById(examId);
+    
+    if (!exam) {
+      return res.status(404).json({ message: "Exam not found" });
+    }
+
+    // Lưu thông tin exam vào request để sử dụng ở middleware tiếp theo
+    req.exam = exam;
+    next();
+  } catch (error) {
+    console.error('Validation error:', error);
+    res.status(500).json({ message: "Error validating exam result" });
+  }
+};
+
+
+
+// CLASS
+// Tạo mới một lớp học
+app.post("/classes", isAuthenticated, async (req, res) => {
+  try {
+    const { classId, className, schedule, teacherId, startDate, endDate, maxStudents, location } = req.body;
+
+    // Tạo lớp học mới
+    const newClass = new Class({
+      classId,
+      className,
+      schedule,
+      teacher: teacherId, 
+      startDate,
+      endDate,
+      maxStudents,
+      location
+    });
+
+    await newClass.save();
+
+    res.status(201).json({ message: "Class created successfully", class: newClass });
+  } catch (error) {
+    console.error("Error creating class:", error);
+    res.status(500).json({ message: "Error creating class", error: error.message });
+  }
+});
+
+// Lấy danh sách các lớp học
+app.get("/classes", isAuthenticated, async (req, res) => {
+  try {
+    const classes = await Class.find().populate('teacher', 'username email'); // Populate để lấy thông tin giáo viên
+    res.json(classes);
+  } catch (error) {
+    res.status(500).json({ message: "Error fetching classes", error: error.message });
+  }
+});
+
+// Lấy thông tin chi tiết của một lớp học theo ID
+app.get("/classes/:id", isAuthenticated, async (req, res) => {
+  try {
+    const classData = await Class.findById(req.params.id).populate('teacher', 'username email').populate('students', 'username email');
+    if (!classData) return res.status(404).json({ message: "Class not found" });
+    res.json(classData);
+  } catch (error) {
+    res.status(500).json({ message: "Error fetching class", error: error.message });
+  }
+});
+
+// Cập nhật thông tin lớp học
+app.put("/classes/:id", isAuthenticated, async (req, res) => {
+  try {
+    const updatedClass = await Class.findByIdAndUpdate(req.params.id, req.body, { new: true }).populate('teacher', 'username email').populate('students', 'username email');
+    if (!updatedClass) return res.status(404).json({ message: "Class not found" });
+    res.json({ message: "Class updated successfully", class: updatedClass });
+  } catch (error) {
+    res.status(500).json({ message: "Error updating class", error: error.message });
+  }
+});
+
+// Xóa một lớp học
+app.delete("/classes/:id", isAuthenticated, async (req, res) => {
+  try {
+    const deletedClass = await Class.findByIdAndDelete(req.params.id);
+    if (!deletedClass) return res.status(404).json({ message: "Class not found" });
+    res.json({ message: "Class deleted successfully" });
+  } catch (error) {
+    res.status(500).json({ message: "Error deleting class", error: error.message });
+  }
+});
+
+// Thêm sinh viên vào lớp
+app.post("/classes/:id/add-student", isAuthenticated, async (req, res) => {
+  try {
+    const { email } = req.body; // Lấy email từ request body
+    const classData = await Class.findById(req.params.id);
+    
+    if (!classData) return res.status(404).json({ message: "Class not found" });
+
+    // Tìm sinh viên bằng email
+    const studentData = await Student.findOne({ email: email }); // Giả sử bạn có một model Student
+
+    if (!studentData) return res.status(404).json({ message: "Student not found" });
+
+    // Kiểm tra nếu sinh viên đã có trong lớp
+    if (classData.students.includes(studentData._id)) {
+      return res.status(400).json({ message: "Student already enrolled in class" });
+    }
+
+    // Thêm sinh viên vào lớp
+    classData.students.push(studentData._id); // Thêm ID của sinh viên vào mảng students
+    classData.currentStudents = classData.students.length;
+    await classData.save();
+
+    res.json({ message: "Student added successfully", class: classData });
+  } catch (error) {
+    res.status(500).json({ message: "Error adding student", error: error.message });
+  }
+});
+
+
+
+
 
 // Start the server
 const PORT = process.env.PORT || 3000;
