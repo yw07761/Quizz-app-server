@@ -200,6 +200,16 @@ app.post("/logout", (req, res) => {
     res.json({ message: "Đăng xuất thành công" });
   });
 });
+// API lấy danh sách người dùng
+app.get("/users", isAuthenticated, async (req, res) => {
+  try {
+    const users = await User.find();
+    res.status(200).json(users); // Trả về danh sách người dùng
+  } catch (error) {
+    res.status(500).send({ message: "Lỗi khi tải danh sách người dùng", error });
+  }
+});
+
 
 
 
