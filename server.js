@@ -208,7 +208,42 @@ app.get("/users", isAuthenticated, async (req, res) => {
     res.status(500).send({ message: "Lỗi khi tải danh sách người dùng", error });
   }
 });
+app.get("/user", isAuthenticated, async (req, res) => {
+  try {
+    // Retrieve the user from the database using the user ID from the token
+    const user = await User.findById(req.user.id).select("-password"); // Exclude password field
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+    res.json(user); // Send user data as JSON
+  } catch (error) {
+    console.error('Error fetching user data:', error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
 
+// Cập nhật thông tin 
+app.put('/users/:id', async (req, res) => {
+  try {
+    const { id } = req.params;  // Lấy _id từ params
+    const { email, phoneNumber, gender, dateOfBirth, password } = req.body;
+
+    // Tìm người dùng theo _id và cập nhật thông tin
+    const updatedUser = await User.findByIdAndUpdate(
+      id,  // Sử dụng _id thay vì username
+      { $set: { email, phoneNumber, gender, dateOfBirth, password } },
+      { new: true }
+    );
+
+    if (!updatedUser) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    res.status(200).json(updatedUser);
+  } catch (err) {
+    res.status(500).json({ message: 'Server error', error: err });
+  }
+});
 
 
 
