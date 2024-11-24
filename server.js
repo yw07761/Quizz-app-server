@@ -10,7 +10,6 @@ const jwt = require("jsonwebtoken");
 const User = require("./models/User");
 const Question = require("./models/Question");
 const Exam = require("./models/Exam");
-const Class = require("./models/Class"); 
 const ExamResult = require('./models/ExamResult');
 
 
@@ -585,106 +584,65 @@ const validateExamResult = async (req, res, next) => {
   }
 };
 
+// Lấy thống kê cho bài kiểm tra
+app.get('/exams/:examId/statistics', async (req, res) => {
+  const { examId } = req.params;
 
-
-// CLASS
-// Tạo mới một lớp học
-app.post("/classes", isAuthenticated, async (req, res) => {
   try {
-    const { classId, className, schedule, teacherId, startDate, endDate, maxStudents, location } = req.body;
-
-    // Tạo lớp học mới
-    const newClass = new Class({
-      classId,
-      className,
-      schedule,
-      teacher: teacherId, 
-      startDate,
-      endDate,
-      maxStudents,
-      location
-    });
-
-    await newClass.save();
-
-    res.status(201).json({ message: "Class created successfully", class: newClass });
-  } catch (error) {
-    console.error("Error creating class:", error);
-    res.status(500).json({ message: "Error creating class", error: error.message });
-  }
-});
-
-// Lấy danh sách các lớp học
-app.get("/classes", isAuthenticated, async (req, res) => {
-  try {
-    const classes = await Class.find().populate('teacher', 'username email'); // Populate để lấy thông tin giáo viên
-    res.json(classes);
-  } catch (error) {
-    res.status(500).json({ message: "Error fetching classes", error: error.message });
-  }
-});
-
-// Lấy thông tin chi tiết của một lớp học theo ID
-app.get("/classes/:id", isAuthenticated, async (req, res) => {
-  try {
-    const classData = await Class.findById(req.params.id).populate('teacher', 'username email').populate('students', 'username email');
-    if (!classData) return res.status(404).json({ message: "Class not found" });
-    res.json(classData);
-  } catch (error) {
-    res.status(500).json({ message: "Error fetching class", error: error.message });
-  }
-});
-
-// Cập nhật thông tin lớp học
-app.put("/classes/:id", isAuthenticated, async (req, res) => {
-  try {
-    const updatedClass = await Class.findByIdAndUpdate(req.params.id, req.body, { new: true }).populate('teacher', 'username email').populate('students', 'username email');
-    if (!updatedClass) return res.status(404).json({ message: "Class not found" });
-    res.json({ message: "Class updated successfully", class: updatedClass });
-  } catch (error) {
-    res.status(500).json({ message: "Error updating class", error: error.message });
-  }
-});
-
-// Xóa một lớp học
-app.delete("/classes/:id", isAuthenticated, async (req, res) => {
-  try {
-    const deletedClass = await Class.findByIdAndDelete(req.params.id);
-    if (!deletedClass) return res.status(404).json({ message: "Class not found" });
-    res.json({ message: "Class deleted successfully" });
-  } catch (error) {
-    res.status(500).json({ message: "Error deleting class", error: error.message });
-  }
-});
-
-// Thêm sinh viên vào lớp
-app.post("/classes/:id/add-student", isAuthenticated, async (req, res) => {
-  try {
-    const { email } = req.body; // Lấy email từ request body
-    const classData = await Class.findById(req.params.id);
-    
-    if (!classData) return res.status(404).json({ message: "Class not found" });
-
-    // Tìm sinh viên bằng email
-    const studentData = await Student.findOne({ email: email }); // Giả sử bạn có một model Student
-
-    if (!studentData) return res.status(404).json({ message: "Student not found" });
-
-    // Kiểm tra nếu sinh viên đã có trong lớp
-    if (classData.students.includes(studentData._id)) {
-      return res.status(400).json({ message: "Student already enrolled in class" });
+    // Lấy thông tin bài kiểm tra từ cơ sở dữ liệu
+    const exam = await Exam.findById(examId);
+    if (!exam) {
+      return res.status(404).json({ message: 'Không tìm thấy bài kiểm tra.' });
     }
 
-    // Thêm sinh viên vào lớp
-    classData.students.push(studentData._id); // Thêm ID của sinh viên vào mảng students
-    classData.currentStudents = classData.students.length;
-    await classData.save();
+    // Tính điểm đậu mặc định nếu không có passScore
+    const passScore = exam.passScore || (exam.maxScore * 0.6); // 60% của maxScore nếu không có passScore
 
-    res.json({ message: "Student added successfully", class: classData });
+    // Lấy kết quả bài kiểm tra và thông tin người dùng liên quan
+    const results = await ExamResult.find({ examId }).populate('studentId', 'username email');
+    if (results.length === 0) {
+      return res.status(404).json({ message: 'Không có kết quả cho bài kiểm tra này.' });
+    }
+
+    // Tính toán các chỉ số thống kê
+    const totalParticipants = results.length;
+    const scores = results.map((r) => r.score);
+    const averageScore = scores.reduce((sum, score) => sum + score, 0) / scores.length;
+    const highestScore = Math.max(...scores);
+    const lowestScore = Math.min(...scores);
+
+    // Tính số thí sinh đạt điểm đậu
+    const passCount = scores.filter((score) => score >= passScore).length;
+
+    // Tính tỷ lệ đậu
+    const passPercentage = totalParticipants > 0 ? (passCount / totalParticipants) * 100 : 0;
+
+    // Chuẩn bị danh sách chi tiết người tham gia
+    const participants = results.map((result) => ({
+      username: result.studentId.username,
+      email: result.studentId.email,
+      score: result.score
+    }));
+
+    // Trả về dữ liệu JSON
+    res.json({
+      exam: { username: exam.username },
+      totalParticipants,
+      averageScore: averageScore.toFixed(2),
+      highestScore,
+      lowestScore,
+      passPercentage: passPercentage.toFixed(2),
+      participants
+    });
   } catch (error) {
-    res.status(500).json({ message: "Error adding student", error: error.message });
+    console.error('Error fetching statistics:', error);
+    res.status(500).json({ message: 'Có lỗi xảy ra khi lấy thống kê.' });
   }
 });
+
+
+
+
 
 
 
