@@ -589,14 +589,17 @@ app.get('/exams/:examId/statistics', async (req, res) => {
   const { examId } = req.params;
 
   try {
-    // Lấy thông tin bài kiểm tra
+    // Lấy thông tin bài kiểm tra từ cơ sở dữ liệu
     const exam = await Exam.findById(examId);
     if (!exam) {
       return res.status(404).json({ message: 'Không tìm thấy bài kiểm tra.' });
     }
 
+    // Tính điểm đậu mặc định nếu không có passScore
+    const passScore = exam.passScore || (exam.maxScore * 0.6); // 60% của maxScore nếu không có passScore
+
     // Lấy kết quả bài kiểm tra và thông tin người dùng liên quan
-    const results = await ExamResult.find({ examId }).populate('studentId', 'username email'); // Populate để lấy thông tin người dùng
+    const results = await ExamResult.find({ examId }).populate('studentId', 'username email');
     if (results.length === 0) {
       return res.status(404).json({ message: 'Không có kết quả cho bài kiểm tra này.' });
     }
@@ -607,8 +610,12 @@ app.get('/exams/:examId/statistics', async (req, res) => {
     const averageScore = scores.reduce((sum, score) => sum + score, 0) / scores.length;
     const highestScore = Math.max(...scores);
     const lowestScore = Math.min(...scores);
-    const passCount = scores.filter((score) => score >= exam.passScore).length;
-    const passPercentage = (passCount / totalParticipants) * 100;
+
+    // Tính số thí sinh đạt điểm đậu
+    const passCount = scores.filter((score) => score >= passScore).length;
+
+    // Tính tỷ lệ đậu
+    const passPercentage = totalParticipants > 0 ? (passCount / totalParticipants) * 100 : 0;
 
     // Chuẩn bị danh sách chi tiết người tham gia
     const participants = results.map((result) => ({
@@ -632,6 +639,8 @@ app.get('/exams/:examId/statistics', async (req, res) => {
     res.status(500).json({ message: 'Có lỗi xảy ra khi lấy thống kê.' });
   }
 });
+
+
 
 
 
