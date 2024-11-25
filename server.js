@@ -274,7 +274,7 @@ app.get('/questions/:id', async (req, res) => {
 
 app.get('/questions', isAuthenticated, async (req, res) => {
   try {
-    const { status, page = 1, limit = 10 } = req.query;
+    const { status } = req.query;
     const filter = {};
 
     if (!req.user || !req.user.role) {
@@ -291,7 +291,7 @@ app.get('/questions', isAuthenticated, async (req, res) => {
       return res.status(403).json({ message: 'You do not have permission to view questions' });
     }
 
-    const questions = await Question.find(filter).skip((page - 1) * limit).limit(parseInt(limit));
+    const questions = await Question.find(filter); // Removed pagination logic
 
     if (!questions.length) {
       return res.status(404).json({ message: 'No questions found' });
@@ -303,7 +303,6 @@ app.get('/questions', isAuthenticated, async (req, res) => {
     res.status(500).json({ message: 'Error fetching questions', error: error.message });
   }
 });
-
 
 // Other Question Endpoints
 app.post("/questions", async (req, res) => {

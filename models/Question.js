@@ -26,10 +26,12 @@ const questionSchema = new mongoose.Schema({
     validate: [arrayLimit, '{PATH} must have at least 2 options']
   },
   category: {
-    type: String
+    type: String,
+    required: [true, 'Category is required']
   },
   group: {
-    type: String
+    type: String,
+    required: [true, 'Group is required']
   },
   status: {
     type: String,
