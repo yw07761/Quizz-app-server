@@ -30,6 +30,11 @@ const questionSchema = new mongoose.Schema({
   },
   group: {
     type: String
+  },
+  status: {
+    type: String,
+    enum: ['pending', 'approved', 'rejected'],
+    default: 'pending' // Mặc định là chờ duyệt
   }
 }, { timestamps: true });
 

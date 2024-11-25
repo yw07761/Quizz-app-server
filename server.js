@@ -250,42 +250,85 @@ app.put('/users/:id', async (req, res) => {
 // Endpoint to Get a Question by _id or questionId
 app.get('/questions/:id', async (req, res) => {
   try {
-    const id = req.params.id.trim(); // Loại bỏ khoảng trắng và ký tự xuống dòng
+    const id = req.params.id.trim();
+    let question;
 
-    // Kiểm tra tính hợp lệ của ObjectId
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ message: "Invalid question ID format" });
+    if (mongoose.Types.ObjectId.isValid(id)) {
+      question = await Question.findById(id); // Tìm theo _id
     }
 
-    const question = await Question.findById(id);
+    if (!question) {
+      question = await Question.findOne({ questionID: id }); // Tìm theo questionID nếu _id không khớp
+    }
+
     if (!question) {
       return res.status(404).json({ message: "Question not found" });
     }
 
     res.json(question);
   } catch (error) {
-    console.error("Error fetching question:", error); // Log lỗi chi tiết nếu có
+    console.error("Error fetching question:", error);
     res.status(500).json({ message: "Error fetching question", error: error.message });
   }
 });
 
+app.get('/questions', isAuthenticated, async (req, res) => {
+  try {
+    const { status, page = 1, limit = 10 } = req.query;
+    const filter = {};
+
+    if (!req.user || !req.user.role) {
+      return res.status(401).json({ message: 'User role is not defined' });
+    }
+
+    // Phân quyền hiển thị câu hỏi
+    if (req.user.role === 'teacher') {
+      filter.createdBy = req.user._id;  // Giáo viên chỉ có thể xem câu hỏi của mình
+      filter.status = 'approved';  // Giáo viên chỉ xem câu hỏi đã duyệt
+    } else if (req.user.role === 'admin') {
+      filter.status = status || { $in: ['approved', 'pending'] };  // Admin có thể xem câu hỏi 'approved' và 'pending'
+    } else {
+      return res.status(403).json({ message: 'You do not have permission to view questions' });
+    }
+
+    const questions = await Question.find(filter).skip((page - 1) * limit).limit(parseInt(limit));
+
+    if (!questions.length) {
+      return res.status(404).json({ message: 'No questions found' });
+    }
+
+    res.json(questions);
+  } catch (error) {
+    console.error('Error fetching questions:', error);
+    res.status(500).json({ message: 'Error fetching questions', error: error.message });
+  }
+});
 
 
 // Other Question Endpoints
 app.post("/questions", async (req, res) => {
   try {
     const { text, answers, category, group } = req.body;
+
     if (!text || !answers || answers.length < 2) {
       return res.status(400).json({ message: "Insufficient data" });
     }
+
     const correctAnswers = answers.filter(answer => answer.isCorrect);
     if (correctAnswers.length !== 1) {
       return res.status(400).json({ message: "There must be exactly one correct answer" });
     }
 
-    const question = new Question({ text, answers, category, group });
-    await question.save();
+    // Tạo câu hỏi mới với trạng thái 'pending'
+    const question = new Question({
+      text,
+      answers,
+      category,
+      group,
+      status: 'pending' // Trạng thái mặc định là "chờ duyệt"
+    });
 
+    await question.save();
     res.status(201).json({ message: "Question created successfully", question });
   } catch (error) {
     console.error("Error creating question:", error);
@@ -293,26 +336,52 @@ app.post("/questions", async (req, res) => {
   }
 });
 
-app.get("/questions", async (req, res) => {
+
+
+
+// Update the route for approving questions to match the correct URL
+app.patch('/questions/:id', isAuthenticated, async (req, res) => {
   try {
-    const questions = await Question.find();
-    res.json(questions);
+      const questionId = req.params.id;
+      const userRole = req.user?.role; // Safely access the role property
+
+      if (!userRole) {
+          return res.status(403).json({ message: "User  role is not defined" });
+      }
+
+      if (userRole !== 'admin') {
+          return res.status(403).json({ message: "Access denied: Admins only" });
+      }
+
+      // Proceed with updating the question status
+      const updatedQuestion = await Question.findByIdAndUpdate(questionId, req.body, { new: true });
+      return res.status(200).json(updatedQuestion);
   } catch (error) {
-    res.status(500).json({ message: "Error fetching questions", error: error.message });
+      return res.status(500).json({ message: "Error updating question status", error });
   }
 });
 
+
+// Existing route for updating a question
 app.put("/questions/:id", async (req, res) => {
   try {
     const { id } = req.params;
+
+    // Prevent users from directly changing the status to 'approved'
+    if (req.body.status && req.body.status === 'approved') {
+      return res.status(403).json({ message: "You are not authorized to approve this question" });
+    }
+
     const updatedQuestion = await Question.findByIdAndUpdate(id, req.body, { new: true });
     if (!updatedQuestion) return res.status(404).json({ message: "Question not found" });
+
     res.json(updatedQuestion);
   } catch (error) {
     res.status(500).json({ message: "Error updating question", error: error.message });
   }
 });
 
+// Existing route for deleting a question
 app.delete("/questions/:id", async (req, res) => {
   try {
     const { id } = req.params;
@@ -323,6 +392,10 @@ app.delete("/questions/:id", async (req, res) => {
     res.status(500).json({ message: "Error deleting question", error: error.message });
   }
 });
+
+
+
+
 
 // Exam Endpoints
 app.post('/exams', isAuthenticated, async (req, res) => {
