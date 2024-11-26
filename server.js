@@ -391,6 +391,24 @@ app.delete("/questions/:id", async (req, res) => {
     res.status(500).json({ message: "Error deleting question", error: error.message });
   }
 });
+// Up file
+app.post('/questions/bulk-upload', async (req, res) => {
+  try {
+    const questions = req.body;
+
+    if (!Array.isArray(questions) || questions.length === 0) {
+      return res.status(400).json({ message: "Dữ liệu không hợp lệ!" });
+    }
+
+    // Thêm câu hỏi vào cơ sở dữ liệu
+    const result = await Question.insertMany(questions);
+
+    res.status(201).json({ message: "Thêm câu hỏi thành công!", questions: result });
+  } catch (error) {
+    console.error("Error uploading questions:", error);
+    res.status(500).json({ message: "Lỗi khi thêm câu hỏi!", error: error.message });
+  }
+});
 
 
 
