@@ -202,7 +202,7 @@ app.put("/users/:userId/role", isAuthenticated, async (req, res) => {
     if (!user) return res.status(404).send({ message: "User not found" });
 
     // Kiểm tra vai trò có hợp lệ hay không
-    const validRoles = ['user', 'student', 'teacher'];
+    const validRoles = ['user', 'student', 'teacher', 'admin'];
     if (!validRoles.includes(role)) {
       return res.status(400).send({ message: `Current role is: ${user.role}` });
     }
@@ -274,6 +274,27 @@ app.put('/users/:id', async (req, res) => {
     res.status(200).json(updatedUser);
   } catch (err) {
     res.status(500).json({ message: 'Server error', error: err });
+  }
+});
+// API xóa người dùng (delete user)
+app.delete("/users/:userId", isAuthenticated, async (req, res) => {
+  try {
+    const { userId } = req.params; // Lấy userId từ tham số đường dẫn
+
+    // Kiểm tra xem người dùng có quyền xóa người khác không (Optional: Role Check)
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ message: "Bạn không có quyền xóa người dùng" });
+    }
+
+    // Tìm người dùng và xóa
+    const deletedUser = await User.findByIdAndDelete(userId);
+    if (!deletedUser) {
+      return res.status(404).json({ message: "Người dùng không tồn tại" });
+    }
+
+    res.status(200).json({ message: "Xóa người dùng thành công" });
+  } catch (error) {
+    res.status(500).json({ message: "Lỗi khi xóa người dùng", error });
   }
 });
 
