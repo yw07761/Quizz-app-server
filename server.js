@@ -3,7 +3,6 @@ require("dotenv").config();
 const express = require("express");
 const mongoose = require("mongoose");
 const bcrypt = require("bcrypt");
-const cors = require("cors");
 const session = require("express-session");
 const MongoStore = require("connect-mongo");
 const jwt = require("jsonwebtoken");
@@ -11,19 +10,32 @@ const User = require("./models/User");
 const Question = require("./models/Question");
 const Exam = require("./models/Exam");
 const ExamResult = require('./models/ExamResult');
-
+const AWS = require('aws-sdk');
+const multer = require('multer');
+const multerS3 = require('multer-s3');
+const s3 = new AWS.S3();
+const upload = multer({ 
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 50 * 1024 * 1024 } // Giới hạn dung lượng file là 50MB
+});
+const cors = require('cors'); 
 
 const app = express();
 
+
 // Connect to MongoDB
-mongoose.connect(process.env.MONGODB_URI, { 
-  useNewUrlParser: true, 
-  useUnifiedTopology: true 
-});
+mongoose.connect(process.env.MONGODB_URI)
+  .then(() => {
+    console.log("Successfully connected to MongoDB!");
+  })
+  .catch(err => {
+    console.error("Error connecting to MongoDB:", err);
+  });
 
 const db = mongoose.connection;
 db.on("error", console.error.bind(console, "connection error:"));
-db.once("open", () => console.log("Successfully connected to MongoDB!"));
+db.once("open", () => console.log("MongoDB connection is open."));
+
 
 // Middleware
 app.use(express.json());
@@ -39,6 +51,26 @@ app.use(session({
   store: MongoStore.create({ mongoUrl: process.env.MONGODB_URI }),
   cookie: { secure: "auto", httpOnly: true, maxAge: 1000 * 60 * 60 * 24 }
 }));
+app.post('/upload-audio', upload.single('audioFile'), (req, res) => {
+  if (!req.file) {
+    return res.status(400).send('No file uploaded.');
+  }
+
+  const params = {
+    Bucket: 'audio-files-quizz-web',
+    Key: `audio-files/${Date.now()}-${req.file.originalname}`,
+    Body: req.file.buffer,
+    ContentType: req.file.mimetype,
+  };
+
+  s3.upload(params, (err, data) => {
+    if (err) {
+      console.error('S3 upload error:', err);
+      return res.status(500).send('Error uploading file to S3');
+    }
+    res.send({ audioUrl: data.Location });
+  });
+});
 
 // Đăng ký người dùng
 app.post("/sign-up", async (req, res) => {
@@ -284,7 +316,7 @@ app.get('/questions', isAuthenticated, async (req, res) => {
     // Phân quyền hiển thị câu hỏi
     if (req.user.role === 'teacher') {
       filter.createdBy = req.user._id;  // Giáo viên chỉ có thể xem câu hỏi của mình
-      filter.status = 'approved';  // Giáo viên chỉ xem câu hỏi đã duyệt
+      filter.status = status || { $in: ['approved', 'pending'] };  // Admin có thể xem câu hỏi 'approved' và 'pending'
     } else if (req.user.role === 'admin') {
       filter.status = status || { $in: ['approved', 'pending'] };  // Admin có thể xem câu hỏi 'approved' và 'pending'
     } else {
@@ -304,11 +336,43 @@ app.get('/questions', isAuthenticated, async (req, res) => {
   }
 });
 
-// Other Question Endpoints
-app.post("/questions", async (req, res) => {
+// // Other Question Endpoints: Tạo câu hỏi với văn bản
+// app.post("/questions", async (req, res) => {
+//   try {
+//     const { text, answers, category, group } = req.body;
+
+//     if (!text || !answers || answers.length < 2) {
+//       return res.status(400).json({ message: "Insufficient data" });
+//     }
+
+//     const correctAnswers = answers.filter(answer => answer.isCorrect);
+//     if (correctAnswers.length !== 1) {
+//       return res.status(400).json({ message: "There must be exactly one correct answer" });
+//     }
+
+//     // Tạo câu hỏi mới với trạng thái 'pending'
+//     const question = new Question({
+//       text,
+//       answers,
+//       category,
+//       group,
+//       status: 'pending' // Trạng thái mặc định là "chờ duyệt"
+//     });
+
+//     await question.save();
+//     res.status(201).json({ message: "Question created successfully", question });
+//   } catch (error) {
+//     console.error("Error creating question:", error);
+//     res.status(500).json({ message: "Failed to create question", error: error.message });
+//   }
+// });
+
+// Endpoint tạo câu hỏi với audio file
+app.post("/questions", upload.single('audioFile'), async (req, res) => {
   try {
     const { text, answers, category, group } = req.body;
 
+    // Kiểm tra dữ liệu câu hỏi
     if (!text || !answers || answers.length < 2) {
       return res.status(400).json({ message: "Insufficient data" });
     }
@@ -318,9 +382,15 @@ app.post("/questions", async (req, res) => {
       return res.status(400).json({ message: "There must be exactly one correct answer" });
     }
 
+    // Nếu có file âm thanh, thay vì văn bản, sẽ lưu URL của file trên S3 vào text
+    let audioUrl = null;
+    if (req.file) {
+      audioUrl = req.file.location; // URL của tệp âm thanh trên S3
+    }
+
     // Tạo câu hỏi mới với trạng thái 'pending'
     const question = new Question({
-      text,
+      text: audioUrl || text, // Nếu có file audio, lưu URL vào text, nếu không lưu văn bản
       answers,
       category,
       group,
@@ -334,8 +404,6 @@ app.post("/questions", async (req, res) => {
     res.status(500).json({ message: "Failed to create question", error: error.message });
   }
 });
-
-
 
 
 // Update the route for approving questions to match the correct URL
@@ -361,17 +429,47 @@ app.patch('/questions/:id', isAuthenticated, async (req, res) => {
 });
 
 
-// Existing route for updating a question
-app.put("/questions/:id", async (req, res) => {
+// // Existing route for updating a question
+// app.put("/questions/:id", async (req, res) => {
+//   try {
+//     const { id } = req.params;
+//     const updateData = { ...req.body };
+
+//     // Không cho phép chỉnh sửa `_id` hoặc trạng thái phê duyệt
+//     delete updateData._id; // Xóa `_id` nếu có từ client
+//     if (updateData.status === 'approved') {
+//       return res.status(403).json({ message: "You are not authorized to approve this question" });
+//     }
+
+//     // Cập nhật câu hỏi
+//     const updatedQuestion = await Question.findByIdAndUpdate(id, updateData, { new: true });
+//     if (!updatedQuestion) return res.status(404).json({ message: "Question not found" });
+
+//     res.json(updatedQuestion);
+//   } catch (error) {
+//     res.status(500).json({ message: "Error updating question", error: error.message });
+//   }
+// });
+
+// Endpoint cập nhật câu hỏi
+app.put("/questions/:id", upload.single('audioFile'), async (req, res) => {
   try {
     const { id } = req.params;
+    const updateData = { ...req.body };
 
-    // Prevent users from directly changing the status to 'approved'
-    if (req.body.status && req.body.status === 'approved') {
+    // Không cho phép chỉnh sửa `_id` hoặc trạng thái phê duyệt
+    delete updateData._id; // Xóa `_id` nếu có từ client
+    if (updateData.status === 'approved') {
       return res.status(403).json({ message: "You are not authorized to approve this question" });
     }
 
-    const updatedQuestion = await Question.findByIdAndUpdate(id, req.body, { new: true });
+    // Nếu có tệp âm thanh mới, lưu URL vào trường text
+    if (req.file) {
+      updateData.text = req.file.location; // Cập nhật URL của file âm thanh trên S3
+    }
+
+    // Cập nhật câu hỏi
+    const updatedQuestion = await Question.findByIdAndUpdate(id, updateData, { new: true });
     if (!updatedQuestion) return res.status(404).json({ message: "Question not found" });
 
     res.json(updatedQuestion);
@@ -379,6 +477,7 @@ app.put("/questions/:id", async (req, res) => {
     res.status(500).json({ message: "Error updating question", error: error.message });
   }
 });
+
 
 // Existing route for deleting a question
 app.delete("/questions/:id", async (req, res) => {
@@ -392,12 +491,42 @@ app.delete("/questions/:id", async (req, res) => {
   }
 });
 // Up file
-app.post('/questions/bulk-upload', async (req, res) => {
+// app.post('/questions/bulk-upload', async (req, res) => {
+//   try {
+//     const questions = req.body;
+
+//     if (!Array.isArray(questions) || questions.length === 0) {
+//       return res.status(400).json({ message: "Dữ liệu không hợp lệ!" });
+//     }
+
+//     // Thêm câu hỏi vào cơ sở dữ liệu
+//     const result = await Question.insertMany(questions);
+
+//     res.status(201).json({ message: "Thêm câu hỏi thành công!", questions: result });
+//   } catch (error) {
+//     console.error("Error uploading questions:", error);
+//     res.status(500).json({ message: "Lỗi khi thêm câu hỏi!", error: error.message });
+//   }
+// });
+
+
+// Bulk Upload câu hỏi với audio file
+app.post('/questions/bulk-upload', upload.array('audioFile', 10), async (req, res) => {
   try {
     const questions = req.body;
 
+    // Kiểm tra dữ liệu câu hỏi
     if (!Array.isArray(questions) || questions.length === 0) {
       return res.status(400).json({ message: "Dữ liệu không hợp lệ!" });
+    }
+
+    // Nếu có file âm thanh, thay vì văn bản, sẽ lưu URL của file trên S3 vào text
+    if (req.files && req.files.length > 0) {
+      questions.forEach((question, index) => {
+        if (req.files[index]) {
+          question.text = req.files[index].location; // Lưu URL tệp âm thanh
+        }
+      });
     }
 
     // Thêm câu hỏi vào cơ sở dữ liệu
@@ -409,7 +538,6 @@ app.post('/questions/bulk-upload', async (req, res) => {
     res.status(500).json({ message: "Lỗi khi thêm câu hỏi!", error: error.message });
   }
 });
-
 
 
 
