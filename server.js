@@ -315,7 +315,6 @@ app.get('/questions', isAuthenticated, async (req, res) => {
 
     // Phân quyền hiển thị câu hỏi
     if (req.user.role === 'teacher') {
-      filter.createdBy = req.user._id;  // Giáo viên chỉ có thể xem câu hỏi của mình
       filter.status = status || { $in: ['approved', 'pending'] };  // Admin có thể xem câu hỏi 'approved' và 'pending'
     } else if (req.user.role === 'admin') {
       filter.status = status || { $in: ['approved', 'pending'] };  // Admin có thể xem câu hỏi 'approved' và 'pending'
