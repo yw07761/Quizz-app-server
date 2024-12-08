@@ -433,7 +433,7 @@ app.patch('/questions/:id', isAuthenticated, async (req, res) => {
       const userRole = req.user?.role; // Safely access the role property
 
       if (!userRole) {
-          return res.status(403).json({ message: "User  role is not defined" });
+          return res.status(403).json({ message: "User role is not defined" });
       }
 
       if (userRole !== 'admin') {
@@ -837,6 +837,32 @@ app.get('/exams/user/:userId/results', isAuthenticated, async (req, res) => {
     });
   }
 });
+// Route to fetch exam results by examId and userId
+app.get('/exams/:examId/results/:userId', async (req, res) => {
+  const { examId, userId } = req.params;
+
+  try {
+    // Dùng new ObjectId() để tạo ObjectId đúng cách
+    const result = await ExamResult.findOne({
+      examId: new mongoose.Types.ObjectId(examId),  // Đảm bảo sử dụng 'new'
+      studentId: new mongoose.Types.ObjectId(userId) // Đảm bảo sử dụng 'new'
+    });
+
+    if (!result) {
+      return res.status(404).json({ message: 'No results found for this exam and user' });
+    }
+
+    res.json(result);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+
+
+
+
 
 // Middleware để kiểm tra và xử lý kết quả thi trước khi lưu
 const validateExamResult = async (req, res, next) => {
@@ -892,6 +918,7 @@ app.get('/exams/:examId/statistics', async (req, res) => {
 
     // Chuẩn bị danh sách chi tiết người tham gia
     const participants = results.map((result) => ({
+      user: result.studentId._id, // Trả về _id của người dùng
       username: result.studentId.username,
       email: result.studentId.email,
       score: result.score
