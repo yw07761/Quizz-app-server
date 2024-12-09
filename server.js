@@ -295,11 +295,14 @@ app.post("/users", async (req, res) => {
       return res.status(400).json({ message: 'Username hoặc email đã tồn tại' });
     }
 
-    // Tạo người dùng mới
+    // Mã hóa mật khẩu
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Tạo người dùng mới với mật khẩu đã mã hóa
     const newUser = new User({
       username,
       email,
-      password, // Chắc chắn mã hóa mật khẩu trước khi lưu
+      password: hashedPassword, // Lưu mật khẩu đã mã hóa
       role,
       dateOfBirth,
       gender,
@@ -313,6 +316,7 @@ app.post("/users", async (req, res) => {
     res.status(500).json({ message: "Tạo người dùng thất bại.", error: error.message });
   }
 });
+
 
 
 // API xóa người dùng (delete user)
