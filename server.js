@@ -1,5 +1,6 @@
 require("dotenv").config();
 
+const validateUser = require('./middleware/validateUser'); // Kiểm tra xem có import đúng không
 const express = require("express");
 const mongoose = require("mongoose");
 const bcrypt = require("bcrypt");
@@ -260,10 +261,16 @@ app.put('/users/:id', async (req, res) => {
     const { id } = req.params;  // Lấy _id từ params
     const { email, phoneNumber, gender, dateOfBirth, password } = req.body;
 
+    // Mã hóa mật khẩu nếu có trong yêu cầu
+    let hashedPassword = password;
+    if (password) {
+      hashedPassword = await bcrypt.hash(password, 10);  // Mã hóa mật khẩu
+    }
+
     // Tìm người dùng theo _id và cập nhật thông tin
     const updatedUser = await User.findByIdAndUpdate(
       id,  // Sử dụng _id thay vì username
-      { $set: { email, phoneNumber, gender, dateOfBirth, password } },
+      { $set: { email, phoneNumber, gender, dateOfBirth, password: hashedPassword } },
       { new: true }
     );
 
@@ -276,6 +283,38 @@ app.put('/users/:id', async (req, res) => {
     res.status(500).json({ message: 'Server error', error: err });
   }
 });
+
+// Tạo người dùng mới
+app.post("/users", async (req, res) => {
+  try {
+    const { username, email, password, role, dateOfBirth, gender, phoneNumber } = req.body;
+
+    // Kiểm tra xem user đã tồn tại chưa
+    const existingUser = await User.findOne({ $or: [{ username }, { email }] });
+    if (existingUser) {
+      return res.status(400).json({ message: 'Username hoặc email đã tồn tại' });
+    }
+
+    // Tạo người dùng mới
+    const newUser = new User({
+      username,
+      email,
+      password, // Chắc chắn mã hóa mật khẩu trước khi lưu
+      role,
+      dateOfBirth,
+      gender,
+      phoneNumber
+    });
+
+    await newUser.save();
+    res.status(201).json(newUser);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Tạo người dùng thất bại.", error: error.message });
+  }
+});
+
+
 // API xóa người dùng (delete user)
 app.delete("/users/:userId", isAuthenticated, async (req, res) => {
   try {
