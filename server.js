@@ -318,18 +318,14 @@ app.get("/check-email", async (req, res) => {
 app.put('/users/:id', async (req, res) => {
   try {
     const { id } = req.params;  // Lấy _id từ params
-    const { username,email, phoneNumber, gender, dateOfBirth, password } = req.body;
+    const { username,email, phoneNumber, gender, dateOfBirth } = req.body;
 
-    // Mã hóa mật khẩu nếu có trong yêu cầu
-    let hashedPassword = password;
-    if (password) {
-      hashedPassword = await bcrypt.hash(password, 10);  // Mã hóa mật khẩu
-    }
+    
 
     // Tìm người dùng theo _id và cập nhật thông tin
     const updatedUser = await User.findByIdAndUpdate(
       id,  // Sử dụng _id thay vì username
-      { $set: { username,email, phoneNumber, gender, dateOfBirth, password: hashedPassword } },
+      { $set: { username,email, phoneNumber, gender, dateOfBirth } },
       { new: true }
     );
 
