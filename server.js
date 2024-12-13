@@ -191,7 +191,24 @@ app.get("/users/:userId/role", isAuthenticated, async (req, res) => {
     res.status(500).send({ message: "Server error", error });
   }
 });
+app.get('/users/:userId', isAuthenticated, async (req, res) => {
+  const { userId } = req.params;
 
+  try {
+    // Find the user by the provided ID
+    const user = await User.findById(userId);
+
+    if (!user) {
+      return res.status(404).json({ message: 'User không tồn tại' });
+    }
+
+    // Return user details
+    res.status(200).json(user);
+  } catch (error) {
+    console.error('Error fetching user:', error);
+    res.status(500).json({ message: 'Đã xảy ra lỗi khi lấy thông tin người dùng' });
+  }
+});
 // Cập nhật vai trò người dùng (dành cho tất cả người dùng đã xác thực)
 app.put("/users/:userId/role", isAuthenticated, async (req, res) => {
   try {
@@ -241,6 +258,32 @@ app.get("/users", isAuthenticated, async (req, res) => {
     res.status(500).send({ message: "Lỗi khi tải danh sách người dùng", error });
   }
 });
+// API tìm người dùng theo email
+app.get("/users", isAuthenticated, async (req, res) => {
+  try {
+    // Lấy email từ query params
+    const { email } = req.query;
+
+    // Nếu không có email trong query params, trả về lỗi
+    if (!email) {
+      return res.status(400).send({ message: "Vui lòng cung cấp email." });
+    }
+
+    // Tìm người dùng theo email
+    const user = await User.findOne({ email });
+
+    // Nếu không tìm thấy người dùng, trả về lỗi
+    if (!user) {
+      return res.status(404).send({ message: "Không tìm thấy người dùng với email này." });
+    }
+
+    // Trả về thông tin người dùng tìm được
+    res.status(200).json(user);
+  } catch (error) {
+    res.status(500).send({ message: "Lỗi khi tìm người dùng theo email", error });
+  }
+});
+
 app.get("/user", isAuthenticated, async (req, res) => {
   try {
     // Retrieve the user from the database using the user ID from the token
@@ -254,12 +297,28 @@ app.get("/user", isAuthenticated, async (req, res) => {
     res.status(500).json({ message: "Internal server error" });
   }
 });
+// API kiểm tra email đã tồn tại
+app.get("/check-email", async (req, res) => {
+  const { email } = req.query;
 
+  try {
+    const user = await User.findOne({ email });
+
+    if (user) {
+      return res.status(200).json(true);  // Email đã tồn tại
+    } else {
+      return res.status(200).json(false); // Email chưa tồn tại
+    }
+  } catch (error) {
+    console.error("Lỗi khi kiểm tra email:", error);
+    return res.status(500).json({ message: "Có lỗi xảy ra, vui lòng thử lại." });
+  }
+});
 // Cập nhật thông tin 
 app.put('/users/:id', async (req, res) => {
   try {
     const { id } = req.params;  // Lấy _id từ params
-    const { email, phoneNumber, gender, dateOfBirth, password } = req.body;
+    const { username,email, phoneNumber, gender, dateOfBirth, password } = req.body;
 
     // Mã hóa mật khẩu nếu có trong yêu cầu
     let hashedPassword = password;
@@ -270,7 +329,7 @@ app.put('/users/:id', async (req, res) => {
     // Tìm người dùng theo _id và cập nhật thông tin
     const updatedUser = await User.findByIdAndUpdate(
       id,  // Sử dụng _id thay vì username
-      { $set: { email, phoneNumber, gender, dateOfBirth, password: hashedPassword } },
+      { $set: { username,email, phoneNumber, gender, dateOfBirth, password: hashedPassword } },
       { new: true }
     );
 
@@ -982,13 +1041,6 @@ app.get('/exams/:examId/statistics', async (req, res) => {
     res.status(500).json({ message: 'Có lỗi xảy ra khi lấy thống kê.' });
   }
 });
-
-
-
-
-
-
-
 
 
 // Start the server
